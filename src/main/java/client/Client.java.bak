@@ -1,0 +1,181 @@
+package client;
+
+import common.Message;
+import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.text.Text;
+import javafx.scene.text.TextFlow;
+import javafx.stage.Stage;
+import java.io.*;
+import java.net.Socket;
+
+public class Client extends Application {
+    private ObjectOutputStream output;
+    private ObjectInputStream input;
+    private String username;
+    private String currentChannel = "general";
+
+    // UI Components
+    private TextFlow chatArea;
+    private TextField inputField;
+    private ListView<String> channelList;
+    private ListView<String> userList;
+    private Label statusLabel;
+
+    @Override
+    public void start(Stage primaryStage) {
+        BorderPane root = new BorderPane();
+        root.setStyle("-fx-background-color: #36393f;");
+
+        // Sidebar des salons
+        channelList = new ListView<>();
+        channelList.setStyle("-fx-background-color: #2f3136; -fx-text-fill: white;");
+        channelList.setPrefWidth(200);
+        channelList.getItems().addAll("general", "dev", "random");
+        channelList.getSelectionModel().selectedItemProperty().addListener((obs, old, newVal) -> {
+            if (newVal != null)
+                sendCommand("/join " + newVal);
+        });
+
+        // Zone centrale de chat
+        VBox chatBox = new VBox(10);
+        chatBox.setPadding(new Insets(10));
+        chatBox.setStyle("-fx-background-color: #36393f;");
+
+        // En-tête du canal
+        Label channelHeader = new Label("# " + currentChannel);
+        channelHeader.setStyle("-fx-text-fill: white; -fx-font-size: 16px; -fx-font-weight: bold;");
+
+        // Zone de messages
+        chatArea = new TextFlow();
+        chatArea.setStyle("-fx-background-color: #36393f; -fx-padding: 10px;");
+        ScrollPane scrollPane = new ScrollPane(chatArea);
+        scrollPane.setFitToWidth(true);
+        scrollPane.setStyle("-fx-background: #36393f;");
+        VBox.setVgrow(scrollPane, Priority.ALWAYS);
+
+        // Input area
+        HBox inputBox = new HBox(10);
+        inputField = new TextField();
+        inputField.setStyle("-fx-background-color: #40444b; -fx-text-fill: white; -fx-prompt-text-fill: gray;");
+        inputField.setPromptText("Envoyer un message dans #" + currentChannel);
+        HBox.setHgrow(inputField, Priority.ALWAYS);
+
+        Button sendBtn = new Button("Envoyer");
+        sendBtn.setStyle("-fx-background-color: #5865f2; -fx-text-fill: white;");
+        sendBtn.setOnAction(e -> sendMessage());
+
+        inputField.setOnAction(e -> sendMessage());
+        inputBox.getChildren().addAll(inputField, sendBtn);
+
+        chatBox.getChildren().addAll(channelHeader, scrollPane, inputBox);
+
+        // Sidebar des utilisateurs
+        userList = new ListView<>();
+        userList.setStyle("-fx-background-color: #2f3136; -fx-text-fill: #8e9297;");
+        userList.setPrefWidth(200);
+
+        root.setLeft(channelList);
+        root.setCenter(chatBox);
+        root.setRight(userList);
+
+        Scene scene = new Scene(root, 1000, 700);
+        primaryStage.setTitle("Discord Java Client");
+        primaryStage.setScene(scene);
+        primaryStage.show();
+
+        // Connexion au serveur
+        connectToServer();
+    }
+
+    private void connectToServer() {
+        try {
+            Socket socket = new Socket("localhost", 5000);
+            output = new ObjectOutputStream(socket.getOutputStream());
+            input = new ObjectInputStream(socket.getInputStream());
+
+            // Demande du pseudo
+            TextInputDialog dialog = new TextInputDialog("User");
+            dialog.setTitle("Connexion");
+            dialog.setHeaderText("Entrez votre pseudo:");
+            username = dialog.showAndWait().orElse("Anonymous");
+
+            // Thread de réception
+            new Thread(() -> {
+                try {
+                    while (true) {
+                        Message msg = (Message) input.readObject();
+                        Platform.runLater(() -> displayMessage(msg));
+                    }
+                } catch (IOException | ClassNotFoundException e) {
+                    Platform.runLater(() -> addSystemMessage("Déconnecté du serveur"));
+                }
+            }).start();
+
+            // Envoi du pseudo initial
+            output.writeObject(new Message(username, "", "", Message.MessageType.SYSTEM));
+
+        } catch (IOException e) {
+            addSystemMessage("Erreur de connexion: " + e.getMessage());
+        }
+    }
+
+    private void sendMessage() {
+        String text = inputField.getText();
+        if (!text.isEmpty()) {
+            try {
+                Message msg = new Message(username, text, currentChannel,
+                        text.startsWith("/") ? Message.MessageType.SYSTEM : Message.MessageType.CHAT);
+                output.writeObject(msg);
+                output.flush();
+                inputField.clear();
+            } catch (IOException e) {
+                addSystemMessage("Erreur d'envoi");
+            }
+        }
+    }
+
+    private void sendCommand(String cmd) {
+        try {
+            output.writeObject(new Message(username, cmd, currentChannel, Message.MessageType.SYSTEM));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void displayMessage(Message msg) {
+        if (msg.getType() == Message.MessageType.SYSTEM) {
+            Text text = new Text("[System] " + msg.getContent() + "\n");
+            text.setFill(Color.GRAY);
+            chatArea.getChildren().add(text);
+        } else if (msg.getType() == Message.MessageType.PRIVATE) {
+            Text user = new Text("[PM de " + msg.getUsername() + "] ");
+            user.setFill(Color.MAGENTA);
+            Text content = new Text(msg.getContent() + "\n");
+            content.setFill(Color.WHITE);
+            chatArea.getChildren().addAll(user, content);
+        } else {
+            Text user = new Text(msg.getUsername() + ": ");
+            user.setFill(Color.CYAN);
+            user.setStyle("-fx-font-weight: bold;");
+            Text content = new Text(msg.getContent() + "\n");
+            content.setFill(Color.WHITE);
+            chatArea.getChildren().addAll(user, content);
+        }
+    }
+
+    private void addSystemMessage(String text) {
+        Text t = new Text(text + "\n");
+        t.setFill(Color.RED);
+        chatArea.getChildren().add(t);
+    }
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+}
