@@ -23,32 +23,102 @@ public class ClientHandler implements Runnable {
             output.flush();
             input = new ObjectInputStream(socket.getInputStream());
 
-            // Authentification simple
-            output.writeObject(new Message("System", "Entrez votre pseudo:", "auth", Message.MessageType.SYSTEM));
+            // Authentification
+            output.writeObject(new Message("System", "Authentification requise", "auth", Message.MessageType.SYSTEM));
             output.flush();
 
-            try {
-                Message auth = (Message) input.readObject();
-                // Simple validation to ensure unique username
-                String candidatesUsername = auth.getUsername();
-                while (Server.clients.containsKey(candidatesUsername)) {
-                    output.writeObject(new Message("System", "Pseudo pris, choisissez-en un autre:", "auth",
+            while (true) {
+                try {
+                    Message auth = (Message) input.readObject();
+                    String candidatesUsername = auth.getUsername();
+                    String content = auth.getContent(); // password:MODE
+
+                    if (candidatesUsername == null || candidatesUsername.trim().isEmpty()) {
+                        continue;
+                    }
+
+                    String password = "";
+                    String mode = "LOGIN"; // default
+
+                    if (content != null && content.contains(":")) {
+                        String[] parts = content.split(":", 2);
+                        password = parts[0];
+                        if (parts.length > 1)
+                            mode = parts[1];
+                    } else if (content != null) {
+                        password = content;
+                    }
+
+                    if ("REGISTER".equals(mode)) {
+                        if (DatabaseManager.userExists(candidatesUsername)) {
+                            output.writeObject(
+                                    new Message("System", "Ce pseudo est déjà utilisé. Essayez de vous connecter.",
+                                            "auth", Message.MessageType.SYSTEM));
+                            output.flush();
+                            continue;
+                        }
+                        DatabaseManager.registerUser(candidatesUsername, password);
+                    } else {
+                        // LOGIN
+                        if (!DatabaseManager.userExists(candidatesUsername)) {
+                            // Optionally auto-register if we want lazy-registration?
+                            // User asked for account creation system, so we should be strict.
+                            output.writeObject(new Message("System", "Compte inexistant. Veuillez vous inscrire.",
+                                    "auth", Message.MessageType.SYSTEM));
+                            output.flush();
+                            continue;
+                        }
+                        if (!DatabaseManager.authenticateUser(candidatesUsername, password)) {
+                            output.writeObject(new Message("System", "Mot de passe incorrect.", "auth",
+                                    Message.MessageType.SYSTEM));
+                            output.flush();
+                            continue;
+                        }
+                    }
+
+                    if (Server.clients.containsKey(candidatesUsername)) {
+                        output.writeObject(new Message("System", "Utilisateur déjà connecté.", "auth",
+                                Message.MessageType.SYSTEM));
+                        output.flush();
+                        continue;
+                    }
+
+                    this.username = candidatesUsername;
+                    output.writeObject(new Message("System", "Authentification réussie", "auth_success",
                             Message.MessageType.SYSTEM));
                     output.flush();
-                    auth = (Message) input.readObject();
-                    candidatesUsername = auth.getUsername();
+                    break;
+
+                } catch (Exception e) {
+                    System.out.println("Erreur d'authentification: " + e.getMessage());
+                    return;
                 }
-                this.username = candidatesUsername;
-            } catch (Exception e) {
-                System.out.println("Erreur d'authentification: " + e.getMessage());
-                return;
             }
 
             Server.registerClient(username, this);
+
+            // Vérifier/Accorder droits si localhost
+            InetAddress addr = socket.getInetAddress();
+            if (addr.isLoopbackAddress() || addr.getHostAddress().equals("127.0.0.1")
+                    || addr.getHostAddress().equals("0:0:0:0:0:0:0:1")) {
+                DatabaseManager.setCanCreateChannel(username, true);
+                System.out.println("Droits admin accordés automatiquement à " + username + " (Localhost)");
+            }
+
+            // Vérifier si bloqué
+            if (DatabaseManager.isBlocked(username)) {
+                output.writeObject(new Message("System", "Vous êtes bloqué.", "auth", Message.MessageType.SYSTEM));
+                disconnect();
+                return;
+            }
+
             System.out.println("Client enregistré: " + username);
 
             // Rejoindre le général par défaut
             joinChannel("general");
+
+            // Envoyer la liste des salons
+            Server.broadcastChannelList();
 
             // Boucle de réception
             while (true) {
@@ -79,11 +149,69 @@ public class ClientHandler implements Runnable {
             }
         } else if (content.startsWith("/list")) {
             listChannels();
+        } else if (content.startsWith("/create ")) {
+            String[] parts = content.split(" ");
+            if (parts.length >= 2) {
+                String channelName = parts[1].trim();
+                String type = parts.length > 2 ? parts[2].toUpperCase() : "TEXT";
+
+                if (DatabaseManager.canCreateChannel(this.username)) {
+                    Server.createChannel(channelName, type);
+                    sendMessage(new Message("System", "Salon #" + channelName + " (" + type + ") créé.", "system",
+                            Message.MessageType.SYSTEM));
+                } else {
+                    sendMessage(new Message("System", "Vous n'avez pas la permission de créer des salons.", "system",
+                            Message.MessageType.SYSTEM));
+                }
+            }
+        } else if (content.startsWith("/deletechannel ")) {
+            String channelName = content.substring(15).trim();
+            if (DatabaseManager.canCreateChannel(this.username)) {
+                Server.deleteChannel(channelName);
+                sendMessage(new Message("System", "Salon #" + channelName + " supprimé.", "system",
+                        Message.MessageType.SYSTEM));
+            }
+        } else if (content.startsWith("/renamechannel ")) {
+            String[] parts = content.split(" ");
+            if (parts.length >= 3) {
+                String oldName = parts[1];
+                String newName = parts[2];
+                if (DatabaseManager.canCreateChannel(this.username)) {
+                    Server.renameChannel(oldName, newName);
+                    sendMessage(new Message("System", "Salon #" + oldName + " renommé en #" + newName, "system",
+                            Message.MessageType.SYSTEM));
+                }
+            }
+        } else if (content.startsWith("/grant ")) {
+            String target = content.substring(7).trim();
+            DatabaseManager.setCanCreateChannel(target, true);
+            sendMessage(new Message("System", "Droit de création accordé à " + target, "system",
+                    Message.MessageType.SYSTEM));
+        } else if (content.startsWith("/block ")) {
+            String target = content.substring(7).trim();
+            DatabaseManager.blockUser(target, true);
+            ClientHandler targetClient = Server.clients.get(target);
+            if (targetClient != null)
+                targetClient.disconnect();
+            sendMessage(new Message("System", target + " a été bloqué.", "system", Message.MessageType.SYSTEM));
+        } else if (content.startsWith("/kick ")) {
+            String target = content.substring(6).trim();
+            DatabaseManager.deleteUser(target);
+            ClientHandler targetClient = Server.clients.get(target);
+            if (targetClient != null)
+                targetClient.disconnect();
+            sendMessage(new Message("System", target + " a été supprimé.", "system", Message.MessageType.SYSTEM));
         } else {
-            // Message normal dans le canal actuel
+            // Message normal ou Fichier dans le canal actuel
             if (currentChannel != null) {
-                currentChannel
-                        .broadcast(new Message(username, content, currentChannel.getName(), Message.MessageType.CHAT));
+                // Si c'est un fichier, on diffuse le message tel quel (avec les bytes)
+                if (msg.getType() == Message.MessageType.FILE) {
+                    currentChannel.broadcast(msg);
+                } else {
+                    // Sinon c'est un CHAT, on peut le reconstruire pour être sûr ou juste passer
+                    currentChannel.broadcast(
+                            new Message(username, content, currentChannel.getName(), Message.MessageType.CHAT));
+                }
             }
         }
     }

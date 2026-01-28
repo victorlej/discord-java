@@ -10,16 +10,21 @@ public class NetworkClient implements Runnable {
     private String host;
     private int port;
     private String username;
+    private String password;
+    private String authMode; // "LOGIN" or "REGISTER"
     private ChatController controller;
     private Socket socket;
     private ObjectOutputStream output;
     private ObjectInputStream input;
     private boolean running;
 
-    public NetworkClient(String host, int port, String username, ChatController controller) {
+    public NetworkClient(String host, int port, String username, String password, String authMode,
+            ChatController controller) {
         this.host = host;
         this.port = port;
         this.username = username;
+        this.password = password;
+        this.authMode = authMode;
         this.controller = controller;
     }
 
@@ -32,14 +37,26 @@ public class NetworkClient implements Runnable {
             input = new ObjectInputStream(socket.getInputStream());
 
             // Handshake
-            // 1. Receive "Enter pseudo"
             try {
-                Message handShakeRequest = (Message) input.readObject();
-                // We ignore the content, just assume it's the prompt.
-
-                // 2. Send username
-                output.writeObject(new Message(username, "", "auth", Message.MessageType.SYSTEM));
+                // 1. Receive "Auth required"
+                Message prompt = (Message) input.readObject();
+                // 2. Send credentials
+                String content = password + ":" + authMode;
+                output.writeObject(new Message(username, content, "auth", Message.MessageType.SYSTEM));
                 output.flush();
+
+                // 3. Wait for Success or Error
+                Message response = (Message) input.readObject();
+                if ("auth_success".equals(response.getChannel())) {
+                    // Success
+                    controller.addSystemMessage("Authentification réussie !");
+                } else {
+                    // Failure (Server likely sent reason in content)
+                    controller.addSystemMessage("Erreur d'authentification: " + response.getContent());
+                    running = false;
+                    socket.close();
+                    return;
+                }
 
             } catch (ClassNotFoundException e) {
                 e.printStackTrace();
@@ -76,6 +93,17 @@ public class NetworkClient implements Runnable {
             String usersCsv = msg.getContent();
             String[] users = usersCsv.split(",");
             controller.updateUserList(users);
+        } else if (msg.getType() == Message.MessageType.CHANNEL_LIST) {
+            String channelsCsv = msg.getContent();
+            // name:type,name:type
+            if (channelsCsv != null && !channelsCsv.isEmpty()) {
+                String[] channels = channelsCsv.split(",");
+                controller.updateChannelList(channels);
+            }
+        } else if (msg.getType() == Message.MessageType.CHANNEL_USERS) {
+            String usersCsv = msg.getContent();
+            String[] users = (usersCsv == null || usersCsv.isEmpty()) ? new String[0] : usersCsv.split(",");
+            controller.updateVoiceUsers(users);
         } else {
             controller.displayMessage(msg);
         }

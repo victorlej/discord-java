@@ -13,14 +13,33 @@ public class Message implements Serializable {
     private MessageType type;
 
     public enum MessageType {
-        CHAT, SYSTEM, PRIVATE, FILE, USER_LIST
+        CHAT, SYSTEM, PRIVATE, FILE, USER_LIST, CHANNEL_LIST, CHANNEL_USERS
     }
 
+    private byte[] fileData;
+    private String fileName;
+
     public Message(String username, String content, String channel, MessageType type) {
+        this(username, content, channel, type, LocalDateTime.now());
+    }
+
+    // Constructor for files
+    public Message(String username, String fileName, byte[] fileData, String channel, MessageType type) {
+        this(username, fileName, fileData, channel, type, LocalDateTime.now());
+    }
+
+    public Message(String username, String fileName, byte[] fileData, String channel, MessageType type,
+            LocalDateTime timestamp) {
+        this(username, fileName, channel, type, timestamp);
+        this.fileData = fileData;
+        this.fileName = fileName;
+    }
+
+    public Message(String username, String content, String channel, MessageType type, LocalDateTime timestamp) {
         this.username = username;
         this.content = content;
         this.channel = channel;
-        this.timestamp = LocalDateTime.now();
+        this.timestamp = timestamp;
         this.type = type;
     }
 
@@ -42,5 +61,13 @@ public class Message implements Serializable {
 
     public MessageType getType() {
         return type;
+    }
+
+    public byte[] getFileData() {
+        return fileData;
+    }
+
+    public String getFileName() {
+        return fileName;
     }
 }
