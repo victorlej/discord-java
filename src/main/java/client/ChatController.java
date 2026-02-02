@@ -2,7 +2,6 @@ package client;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
-import javax.swing.event.ListSelectionListener; // Import explicit
 import javax.swing.text.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -10,6 +9,8 @@ import java.time.format.DateTimeFormatter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URL; // Added URL import
 import java.util.Properties;
 import java.io.FileOutputStream;
 import common.Message;
@@ -181,6 +182,22 @@ public class ChatController extends JFrame {
         headerContainer.setBackground(BG_SIDEBAR);
         headerContainer.add(serverHeader, BorderLayout.CENTER);
         headerContainer.add(addChannelBtn, BorderLayout.EAST);
+
+        // Bouton Paramètres (Engrenage)
+        JButton settingsBtn = new JButton("⚙");
+        settingsBtn.setForeground(TEXT_GRAY);
+        settingsBtn.setBorder(null);
+        settingsBtn.setContentAreaFilled(false);
+        settingsBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        settingsBtn.setToolTipText("Gestion des Rôles");
+        settingsBtn.addActionListener(e -> showRoleManager());
+
+        JPanel topButtons = new JPanel(new GridLayout(1, 2));
+        topButtons.setBackground(BG_SIDEBAR);
+        topButtons.add(addChannelBtn);
+        topButtons.add(settingsBtn);
+
+        headerContainer.add(topButtons, BorderLayout.EAST);
         headerContainer.setBorder(new EmptyBorder(0, 0, 10, 10)); // add padding
 
         JScrollPane channelScroll = new JScrollPane(channelList);
@@ -335,48 +352,46 @@ public class ChatController extends JFrame {
         inputField.addActionListener(e -> sendMessage());
 
         // Menu contextuel pour les utilisateurs
-        JPopupMenu userPopupMenu = new JPopupMenu();
-        JMenuItem rightsItem = new JMenuItem("Donner droit: Créer Salon");
-        JMenuItem blockItem = new JMenuItem("Bloquer");
-        JMenuItem deleteItem = new JMenuItem("Supprimer");
-
-        rightsItem.addActionListener(e -> {
-            String selected = userList.getSelectedValue();
-            if (selected != null) {
-                networkClient.sendCommand("/grant " + selected);
-            }
-        });
-
-        blockItem.addActionListener(e -> {
-            String selected = userList.getSelectedValue();
-            if (selected != null) {
-                networkClient.sendCommand("/block " + selected);
-            }
-        });
-
-        deleteItem.addActionListener(e -> {
-            String selected = userList.getSelectedValue();
-            if (selected != null) {
-                networkClient.sendCommand("/kick " + selected);
-            }
-        });
-
-        userPopupMenu.add(rightsItem);
-        userPopupMenu.add(blockItem);
-        userPopupMenu.add(deleteItem);
+        // (Initialisation supprimée ici car déplacée dans méthode dynamique)
 
         userList.addMouseListener(new MouseAdapter() {
-            @Override
             public void mousePressed(MouseEvent e) {
-                if (SwingUtilities.isRightMouseButton(e)) {
-                    int row = userList.locationToIndex(e.getPoint());
-                    userList.setSelectedIndex(row);
-                    if (row != -1 && !userList.getSelectedValue().equals(currentUser)) {
-                        userPopupMenu.show(userList, e.getX(), e.getY());
+                check(e);
+            }
+
+            public void mouseReleased(MouseEvent e) {
+                check(e);
+            }
+
+            private void check(MouseEvent e) {
+                if (e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e)) {
+                    int index = userList.locationToIndex(e.getPoint());
+                    if (index != -1) {
+                        userList.setSelectedIndex(index);
+                        String selectedUser = userList.getModel().getElementAt(index);
+                        if (!selectedUser.equals(currentUser)) {
+                            showUserContextMenu(selectedUser, e.getX(), e.getY());
+                        }
                     }
                 }
             }
         });
+
+        // Initialisation de l'icône vocale
+        try {
+            voiceIcon = new ImageIcon(getClass().getResource("voice_icon.png"));
+            if (voiceIcon.getImageLoadStatus() != MediaTracker.COMPLETE) {
+                // Try absolute path fallback if resource fails (dev env specific)
+                voiceIcon = new ImageIcon("src/main/java/client/voice_icon.png");
+            }
+            // Scale
+            Image img = voiceIcon.getImage();
+            Image newImg = img.getScaledInstance(16, 16, Image.SCALE_SMOOTH);
+            voiceIcon = new ImageIcon(newImg);
+        } catch (Exception e) {
+            // Fallback silent
+            System.err.println("Icone vocale non chargée: " + e.getMessage());
+        }
 
         // Changement de canal
         channelList.addListSelectionListener(e -> {
@@ -844,7 +859,7 @@ public class ChatController extends JFrame {
         public Component getListCellRendererComponent(JList<?> list, Object value,
                 int index, boolean isSelected, boolean cellHasFocus) {
             ChannelItem item = (ChannelItem) value;
-            String prefix = item.type.equals("VOICE") ? "🔊 " : "# ";
+            String prefix = item.type.equals("VOICE") ? "🎙 " : "# ";
             JLabel label = (JLabel) super.getListCellRendererComponent(
                     list, prefix + item.name, index, isSelected, cellHasFocus);
 
@@ -1058,8 +1073,29 @@ public class ChatController extends JFrame {
         };
 
         for (String emoji : emojis) {
-            JButton btn = new JButton(emoji);
+            // Utilisation d'images en ligne pour les emojis "jolis" (Twemoji)
+            // Fallback sur texte si echec de chargement
+            String hex = Integer.toHexString(emoji.codePointAt(0));
+            String url = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/" + hex + ".png";
+
+            JButton btn = new JButton(emoji); // Texte par défaut
             btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 24));
+
+            // Tentative de chargement asynchrone pour ne pas bloquer l'UI
+            new Thread(() -> {
+                try {
+                    URL u = URI.create(url).toURL();
+                    ImageIcon icon = new ImageIcon(
+                            new ImageIcon(u).getImage().getScaledInstance(32, 32, Image.SCALE_SMOOTH));
+                    SwingUtilities.invokeLater(() -> {
+                        btn.setText("");
+                        btn.setIcon(icon);
+                    });
+                } catch (Exception ex) {
+                    // keep text
+                }
+            }).start();
+
             btn.setForeground(Color.WHITE);
             btn.setBackground(new Color(47, 49, 54));
 
@@ -1067,8 +1103,6 @@ public class ChatController extends JFrame {
             btn.setOpaque(true);
             btn.setBorderPainted(false);
             btn.setFocusPainted(false);
-            // btn.setContentAreaFilled(false); // Removed to ensure background visibility
-            // if needed
             btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
 
             btn.addMouseListener(new MouseAdapter() {
@@ -1387,4 +1421,113 @@ public class ChatController extends JFrame {
 
         previewDialog.setVisible(true);
     }
+
+    private void showUserContextMenu(String username, int x, int y) {
+        JPopupMenu menu = new JPopupMenu();
+        menu.setBackground(BG_DARK);
+        menu.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+
+        JMenuItem title = new JMenuItem("Gérer: " + username);
+        title.setEnabled(false);
+        menu.add(title);
+        menu.addSeparator();
+
+        JMenu rolesMenu = new JMenu("Attribuer Rôle");
+        rolesMenu.setBackground(BG_DARK);
+        rolesMenu.setForeground(TEXT_NORMAL);
+
+        // Hardcoded basic roles map for context menu (In a real app, query server for
+        // available roles)
+        String[] possibleRoles = { "Admin", "Modérateur", "Membre" };
+
+        for (String role : possibleRoles) {
+            JMenuItem roleItem = new JMenuItem(role);
+            roleItem.addActionListener(e -> {
+                networkClient.sendCommand("/assignrole " + username + " " + role);
+            });
+            rolesMenu.add(roleItem);
+        }
+        menu.add(rolesMenu);
+
+        JMenuItem kickItem = new JMenuItem("Expulser");
+        kickItem.addActionListener(e -> networkClient.sendCommand("/kick " + username));
+        menu.add(kickItem);
+
+        JMenuItem blockItem = new JMenuItem("Bloquer");
+        blockItem.addActionListener(e -> networkClient.sendCommand("/block " + username));
+        menu.add(blockItem);
+
+        menu.show(userList, x, y);
+    }
+
+    // --- INTERFACE GESTION ROLES ---
+    private void showRoleManager() {
+        JDialog roleDialog = new JDialog(this, "Gestion des Rôles", true);
+        roleDialog.setSize(500, 400);
+        roleDialog.setLocationRelativeTo(this);
+        roleDialog.setLayout(new BorderLayout());
+        roleDialog.getContentPane().setBackground(BG_DARK);
+
+        JPanel formPanel = new JPanel(new GridLayout(0, 1, 10, 10));
+        formPanel.setBackground(BG_DARK);
+        formPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
+
+        JTextField nameField = new RoundedTextField(20);
+        nameField.setText("NouveauRole");
+
+        JCheckBox chkCreate = new JCheckBox("Créer des salons");
+        JCheckBox chkBlock = new JCheckBox("Bloquer / Expulser");
+        JCheckBox chkDel = new JCheckBox("Supprimer des messages");
+        JCheckBox chkManage = new JCheckBox("Gérer les rôles (Admin)");
+
+        styleCheckBox(chkCreate);
+        styleCheckBox(chkBlock);
+        styleCheckBox(chkDel);
+        styleCheckBox(chkManage);
+
+        formPanel.add(label("Nom du rôle :"));
+        formPanel.add(nameField);
+        formPanel.add(chkCreate);
+        formPanel.add(chkBlock);
+        formPanel.add(chkDel);
+        formPanel.add(chkManage);
+
+        JButton saveBtn = new ModernButton("Créer / Mettre à jour");
+        saveBtn.addActionListener(e -> {
+            String rName = nameField.getText().trim();
+            if (rName.isEmpty())
+                return;
+
+            // Construit la commande sans espaces
+            // /createrole Name 1 0 1 0
+            String cmd = String.format("/createrole %s %b %b %b %b",
+                    rName,
+                    chkCreate.isSelected(),
+                    chkBlock.isSelected(),
+                    chkDel.isSelected(),
+                    chkManage.isSelected());
+
+            networkClient.sendCommand(cmd);
+            roleDialog.dispose();
+        });
+
+        roleDialog.add(formPanel, BorderLayout.CENTER);
+        roleDialog.add(saveBtn, BorderLayout.SOUTH);
+        roleDialog.setVisible(true);
+    }
+
+    private void styleCheckBox(JCheckBox chk) {
+        chk.setBackground(BG_DARK);
+        chk.setForeground(TEXT_NORMAL);
+        chk.setFocusPainted(false);
+        chk.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+    }
+
+    private JLabel label(String text) {
+        JLabel l = new JLabel(text);
+        l.setForeground(TEXT_GRAY);
+        return l;
+    }
+
+    private ImageIcon voiceIcon;
 }

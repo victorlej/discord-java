@@ -14,10 +14,6 @@ public class DatabaseManager {
                 Statement stmt = conn.createStatement()) {
 
             // Table USERS
-            // username: identifiant unique
-            // password: mot de passe
-            // blocked: si l'utilisateur est bloqué
-            // can_create_channel: permission de créer des salons
             String sqlUsers = "CREATE TABLE IF NOT EXISTS users (" +
                     "username TEXT PRIMARY KEY, " +
                     "password TEXT, " +
@@ -39,12 +35,36 @@ public class DatabaseManager {
                     ");";
             stmt.execute(sqlChannels);
 
-            // Migration simple: ajout de la colonne type si elle manque (pour versions
-            // précédentes)
+            // Migration simple: ajout de la colonne type si elle manque
             try {
                 stmt.execute("ALTER TABLE channels ADD COLUMN type TEXT DEFAULT 'TEXT'");
             } catch (SQLException ignored) {
                 // La colonne existe probablement déjà
+            }
+
+            // Table ROLES
+            String sqlRoles = "CREATE TABLE IF NOT EXISTS roles (" +
+                    "name TEXT PRIMARY KEY, " +
+                    "perm_create_channel BOOLEAN DEFAULT 0, " +
+                    "perm_block BOOLEAN DEFAULT 0, " +
+                    "perm_delete_msg BOOLEAN DEFAULT 0, " +
+                    "perm_manage_roles BOOLEAN DEFAULT 0" +
+                    ");";
+            stmt.execute(sqlRoles);
+
+            // Table USER_ROLES
+            String sqlUserRoles = "CREATE TABLE IF NOT EXISTS user_roles (" +
+                    "username TEXT, " +
+                    "role_name TEXT, " +
+                    "FOREIGN KEY(username) REFERENCES users(username) ON DELETE CASCADE, " +
+                    "FOREIGN KEY(role_name) REFERENCES roles(name) ON DELETE CASCADE, " +
+                    "PRIMARY KEY(username, role_name)" +
+                    ");";
+            stmt.execute(sqlUserRoles);
+
+            // Default ADMIN role
+            if (!roleExists("Admin")) {
+                createRole("Admin", true, true, true, true);
             }
 
             // Table MESSAGES (Historique simple)
@@ -193,6 +213,109 @@ public class DatabaseManager {
             e.printStackTrace();
         }
         return false;
+    }
+
+    // --- GESTION ROLES ---
+
+    public static void createRole(String name, boolean pCreate, boolean pBlock, boolean pDelMsg, boolean pManageRoles) {
+        String sql = "INSERT OR REPLACE INTO roles(name, perm_create_channel, perm_block, perm_delete_msg, perm_manage_roles) VALUES(?, ?, ?, ?, ?)";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);
+            pstmt.setBoolean(2, pCreate);
+            pstmt.setBoolean(3, pBlock);
+            pstmt.setBoolean(4, pDelMsg);
+            pstmt.setBoolean(5, pManageRoles);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static boolean roleExists(String name) {
+        String sql = "SELECT 1 FROM roles WHERE name = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);
+            return pstmt.executeQuery().next();
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    public static void assignRole(String username, String roleName) {
+        String sql = "INSERT OR IGNORE INTO user_roles(username, role_name) VALUES(?, ?)";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, roleName);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void removeRole(String username, String roleName) {
+        String sql = "DELETE FROM user_roles WHERE username = ? AND role_name = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, roleName);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static boolean hasPermission(String username, String permColumn) {
+        // permColumn should be one of "perm_create_channel", "perm_block", etc.
+        // Check local overrides first (can_create_channel legacy)?
+        // Let's migrate legacy to role for best practice, or check both.
+        // For now, check joined roles.
+        if ("perm_create_channel".equals(permColumn) && canCreateChannel(username))
+            return true;
+
+        String sql = "SELECT r." + permColumn + " FROM roles r " +
+                "JOIN user_roles ur ON r.name = ur.role_name " +
+                "WHERE ur.username = ? AND r." + permColumn + " = 1";
+
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            return pstmt.executeQuery().next();
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public static List<String> getAllRoles() {
+        List<String> list = new ArrayList<>();
+        try (Connection conn = getConnection();
+                Statement stmt = conn.createStatement();
+                ResultSet rs = stmt.executeQuery("SELECT name FROM roles")) {
+            while (rs.next())
+                list.add(rs.getString("name"));
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return list;
+    }
+
+    public static List<String> getUserRoles(String username) {
+        List<String> list = new ArrayList<>();
+        String sql = "SELECT role_name FROM user_roles WHERE username = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next())
+                    list.add(rs.getString("role_name"));
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return list;
     }
 
     public static void deleteUser(String username) {

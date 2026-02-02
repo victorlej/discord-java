@@ -101,8 +101,11 @@ public class ClientHandler implements Runnable {
             InetAddress addr = socket.getInetAddress();
             if (addr.isLoopbackAddress() || addr.getHostAddress().equals("127.0.0.1")
                     || addr.getHostAddress().equals("0:0:0:0:0:0:0:1")) {
-                DatabaseManager.setCanCreateChannel(username, true);
-                System.out.println("Droits admin accordés automatiquement à " + username + " (Localhost)");
+                // DatabaseManager.setCanCreateChannel(username, true); // Legacy
+                if (!DatabaseManager.hasPermission(username, "perm_create_channel")) {
+                    DatabaseManager.assignRole(username, "Admin");
+                    System.out.println("Role Admin accordé automatiquement à " + username + " (Localhost)");
+                }
             }
 
             // Vérifier si bloqué
@@ -149,13 +152,46 @@ public class ClientHandler implements Runnable {
             }
         } else if (content.startsWith("/list")) {
             listChannels();
+        } else if (content.startsWith("/createrole ")) {
+            // /createrole Name bitmask? Or args? Simplification: /createrole Name 1 1 1 1
+            if (DatabaseManager.hasPermission(this.username, "perm_manage_roles")) {
+                String[] parts = content.split(" ");
+                if (parts.length >= 6) {
+                    String rName = parts[1];
+                    boolean pCreate = "1".equals(parts[2]) || "true".equalsIgnoreCase(parts[2]);
+                    boolean pBlock = "1".equals(parts[3]) || "true".equalsIgnoreCase(parts[3]);
+                    boolean pDel = "1".equals(parts[4]) || "true".equalsIgnoreCase(parts[4]);
+                    boolean pManage = "1".equals(parts[5]) || "true".equalsIgnoreCase(parts[5]);
+
+                    DatabaseManager.createRole(rName, pCreate, pBlock, pDel, pManage);
+                    sendMessage(
+                            new Message("System", "Rôle " + rName + " créé.", "system", Message.MessageType.SYSTEM));
+                } else {
+                    sendMessage(
+                            new Message("System", "Usage: /createrole <name> <pCreate> <pBlock> <pDel> <pManageRole>",
+                                    "system", Message.MessageType.SYSTEM));
+                }
+            } else {
+                sendMessage(new Message("System", "Permission refusée.", "system", Message.MessageType.SYSTEM));
+            }
+        } else if (content.startsWith("/assignrole ")) {
+            if (DatabaseManager.hasPermission(this.username, "perm_manage_roles")) {
+                String[] parts = content.split(" ");
+                if (parts.length >= 3) {
+                    DatabaseManager.assignRole(parts[1], parts[2]);
+                    sendMessage(new Message("System", "Rôle " + parts[2] + " donné à " + parts[1], "system",
+                            Message.MessageType.SYSTEM));
+                }
+            } else {
+                sendMessage(new Message("System", "Permission refusée.", "system", Message.MessageType.SYSTEM));
+            }
         } else if (content.startsWith("/create ")) {
             String[] parts = content.split(" ");
             if (parts.length >= 2) {
                 String channelName = parts[1].trim();
                 String type = parts.length > 2 ? parts[2].toUpperCase() : "TEXT";
 
-                if (DatabaseManager.canCreateChannel(this.username)) {
+                if (DatabaseManager.hasPermission(this.username, "perm_create_channel")) {
                     Server.createChannel(channelName, type);
                     sendMessage(new Message("System", "Salon #" + channelName + " (" + type + ") créé.", "system",
                             Message.MessageType.SYSTEM));
@@ -166,41 +202,54 @@ public class ClientHandler implements Runnable {
             }
         } else if (content.startsWith("/deletechannel ")) {
             String channelName = content.substring(15).trim();
-            if (DatabaseManager.canCreateChannel(this.username)) {
+            if (DatabaseManager.hasPermission(this.username, "perm_create_channel")) {
                 Server.deleteChannel(channelName);
                 sendMessage(new Message("System", "Salon #" + channelName + " supprimé.", "system",
                         Message.MessageType.SYSTEM));
+            } else {
+                sendMessage(new Message("System", "Permission refusée.", "system", Message.MessageType.SYSTEM));
             }
         } else if (content.startsWith("/renamechannel ")) {
             String[] parts = content.split(" ");
             if (parts.length >= 3) {
                 String oldName = parts[1];
                 String newName = parts[2];
-                if (DatabaseManager.canCreateChannel(this.username)) {
+                if (DatabaseManager.hasPermission(this.username, "perm_create_channel")) {
                     Server.renameChannel(oldName, newName);
                     sendMessage(new Message("System", "Salon #" + oldName + " renommé en #" + newName, "system",
                             Message.MessageType.SYSTEM));
                 }
             }
         } else if (content.startsWith("/grant ")) {
-            String target = content.substring(7).trim();
-            DatabaseManager.setCanCreateChannel(target, true);
-            sendMessage(new Message("System", "Droit de création accordé à " + target, "system",
-                    Message.MessageType.SYSTEM));
+            if (DatabaseManager.hasPermission(this.username, "perm_manage_roles")) {
+                // String target = content.substring(7).trim(); // Unused
+                sendMessage(new Message("System", "Utilisez /assignrole pour gérer les permissions.", "system",
+                        Message.MessageType.SYSTEM));
+            }
         } else if (content.startsWith("/block ")) {
-            String target = content.substring(7).trim();
-            DatabaseManager.blockUser(target, true);
-            ClientHandler targetClient = Server.clients.get(target);
-            if (targetClient != null)
-                targetClient.disconnect();
-            sendMessage(new Message("System", target + " a été bloqué.", "system", Message.MessageType.SYSTEM));
+            if (DatabaseManager.hasPermission(this.username, "perm_block")) {
+                String target = content.substring(7).trim();
+                DatabaseManager.blockUser(target, true);
+                ClientHandler targetClient = Server.clients.get(target);
+                if (targetClient != null)
+                    targetClient.disconnect();
+                sendMessage(new Message("System", target + " a été bloqué.", "system", Message.MessageType.SYSTEM));
+            } else {
+                sendMessage(new Message("System", "Commande réservée aux modérateurs.", "system",
+                        Message.MessageType.SYSTEM));
+            }
         } else if (content.startsWith("/kick ")) {
-            String target = content.substring(6).trim();
-            DatabaseManager.deleteUser(target);
-            ClientHandler targetClient = Server.clients.get(target);
-            if (targetClient != null)
-                targetClient.disconnect();
-            sendMessage(new Message("System", target + " a été supprimé.", "system", Message.MessageType.SYSTEM));
+            if (DatabaseManager.hasPermission(this.username, "perm_block")) { // Use block perm for kick too for now
+                String target = content.substring(6).trim();
+                DatabaseManager.deleteUser(target);
+                ClientHandler targetClient = Server.clients.get(target);
+                if (targetClient != null)
+                    targetClient.disconnect();
+                sendMessage(new Message("System", target + " a été supprimé.", "system", Message.MessageType.SYSTEM));
+            } else {
+                sendMessage(new Message("System", "Commande réservée aux modérateurs.", "system",
+                        Message.MessageType.SYSTEM));
+            }
         } else {
             // Message normal ou Fichier dans le canal actuel
             if (currentChannel != null) {
