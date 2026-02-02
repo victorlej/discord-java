@@ -38,11 +38,12 @@ public class ChatController extends JFrame {
     private StyledDocument chatDoc;
 
     private NetworkClient networkClient;
+    private VoiceManager voiceManager; // Voice Manager
     private String currentUser;
     private String currentChannel = "general";
 
     // Voice UI components
-    private JPanel centerPanel; // To switch layouts
+    private JPanel centerPanel;
     private CardLayout centerLayout;
     private JPanel chatPanel;
     private JPanel voicePanel;
@@ -52,10 +53,12 @@ public class ChatController extends JFrame {
     private static final String CONFIG_FILE = "client_config.properties";
 
     public ChatController() {
-        setTitle("Discord Java - Client (v2.0)"); // Version check
+        setTitle("Discord Java - Client (v2.0)");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(1200, 800);
         setLocationRelativeTo(null);
+
+        // Initial setup only, voiceManager must be initialized after host is known
 
         initComponents();
         layoutComponents();
@@ -585,6 +588,10 @@ public class ChatController extends JFrame {
 
         // Update NetworkClient constructor call
         networkClient = new NetworkClient(host, 5000, username, password, authMode[0], this);
+
+        // Init Voice
+        voiceManager = new VoiceManager(host);
+
         new Thread(networkClient).start();
 
         addSystemMessage("Tentative de " + (authMode[0].equals("LOGIN") ? "connexion" : "création de compte") + "...");
@@ -753,15 +760,38 @@ public class ChatController extends JFrame {
     private JLabel channelLabel;
 
     private void switchChannel(String newChannel) {
+        // Détection du type de salon
+        String type = "TEXT";
+        for (int i = 0; i < channelModel.getSize(); i++) {
+            ChannelItem item = channelModel.get(i);
+            if (item.name.equals(newChannel)) {
+                type = item.type;
+                break;
+            }
+        }
+
+        if (type.equals("VOICE")) {
+            voiceManager.joinChannel(newChannel);
+        } else {
+            voiceManager.leaveChannel();
+        }
+
         currentChannel = newChannel;
+
         // Update Header
         if (channelLabel != null) {
-            channelLabel.setText(" # " + currentChannel);
+            channelLabel.setText((type.equals("VOICE") ? " 🔊 " : " # ") + currentChannel);
         }
 
         networkClient.sendCommand("/join " + newChannel);
-        chatArea.setText("");
-        addSystemMessage("Vous avez rejoint #" + newChannel);
+
+        // Clear chat area if text
+        if (type.equals("TEXT")) {
+            chatArea.setText("");
+            addSystemMessage("Vous avez rejoint #" + newChannel);
+        } else {
+            addSystemMessage("Vous avez rejoint le salon vocal: " + newChannel);
+        }
     }
 
     public void addSystemMessage(String text) {
@@ -977,22 +1007,70 @@ public class ChatController extends JFrame {
     }
 
     private void showEmojiPicker(Component invoker) {
-        JPopupMenu emojiMenu = new JPopupMenu();
-        emojiMenu.setLayout(new GridLayout(3, 4, 2, 2));
-        String[] emojis = { "😊", "😂", "🥰", "👍", "❤️", "🎉", "🔥", "😎", "😭", "😮", "👋", "✅" };
+        JWindow emojiWindow = new JWindow(SwingUtilities.getWindowAncestor(invoker));
+
+        JPanel content = new JPanel(new GridLayout(5, 6, 2, 2));
+        content.setBackground(new Color(47, 49, 54)); // BG_SIDEBAR for better visibility
+        content.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(32, 34, 37), 1),
+                new EmptyBorder(5, 5, 5, 5)));
+
+        String[] emojis = {
+                "😀", "😃", "😄", "😁", "😆", "😅",
+                "😂", "🤣", "😊", "😇", "🙂", "🙃",
+                "😉", "😌", "😍", "🥰", "😘", "😗",
+                "👍", "👎", "👌", "✌️", "🤞", "🤟",
+                "❤️", "🧡", "💛", "💚", "💙", "💜"
+        };
 
         for (String emoji : emojis) {
             JButton btn = new JButton(emoji);
-            btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 16));
+            btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 24));
+            btn.setForeground(Color.WHITE);
+            btn.setBackground(new Color(47, 49, 54));
+
+            // Explicitly set opaque for some LAFs
+            btn.setOpaque(true);
             btn.setBorderPainted(false);
-            btn.setContentAreaFilled(false);
+            btn.setFocusPainted(false);
+            // btn.setContentAreaFilled(false); // Removed to ensure background visibility
+            // if needed
+            btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+
+            btn.addMouseListener(new MouseAdapter() {
+                public void mouseEntered(MouseEvent e) {
+                    btn.setBackground(new Color(88, 101, 242));
+                }
+
+                public void mouseExited(MouseEvent e) {
+                    btn.setBackground(new Color(47, 49, 54));
+                }
+            });
+
             btn.addActionListener(e -> {
                 inputField.setText(inputField.getText() + emoji);
-                emojiMenu.setVisible(false);
+                emojiWindow.dispose();
             });
-            emojiMenu.add(btn);
+            content.add(btn);
         }
-        emojiMenu.show(invoker, 50, -100);
+
+        emojiWindow.add(content);
+        emojiWindow.pack();
+
+        Point loc = invoker.getLocationOnScreen();
+        // Position above the button
+        emojiWindow.setLocation(loc.x, loc.y - emojiWindow.getHeight() - 10);
+        emojiWindow.setVisible(true);
+
+        // Auto-close on focus lost
+        emojiWindow.setFocusable(true);
+        emojiWindow.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) {
+                emojiWindow.dispose();
+            }
+        });
+        emojiWindow.requestFocus();
     }
 
     private boolean isImageFile(String name) {

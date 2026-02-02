@@ -27,6 +27,9 @@ public class Server {
 
             System.out.println("🚀 Serveur Discord-like démarré sur le port " + PORT);
 
+            // Start Voice UDP Server
+            new Thread(new VoiceServer()).start();
+
             while (true) {
                 Socket clientSocket = serverSocket.accept();
                 System.out.println("Nouveau client connecté: " + clientSocket.getInetAddress());
