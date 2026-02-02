@@ -989,9 +989,10 @@ public class ChatController extends JFrame {
 
     private void showShareMenu(Component invoker) {
         JPopupMenu menu = new JPopupMenu();
-        menu.setLayout(new GridLayout(1, 3, 5, 5));
-        menu.setBackground(BG_DARK);
-        menu.setBorder(new EmptyBorder(5, 5, 5, 5));
+        // Panel interne pour ajouter du padding et contrôler le style
+        JPanel container = new JPanel(new GridLayout(1, 3, 10, 10));
+        container.setBackground(BG_SIDEBAR);
+        container.setBorder(new EmptyBorder(10, 10, 10, 10));
 
         JButton photoBtn = createRoundButton("📷", "Photos");
         photoBtn.addActionListener(e -> selectAndSendFile(true));
@@ -1002,9 +1003,11 @@ public class ChatController extends JFrame {
         JButton emojiBtn = createRoundButton("😊", "Emojis");
         emojiBtn.addActionListener(e -> showEmojiPicker(invoker));
 
-        menu.add(photoBtn);
-        menu.add(fileBtn);
-        menu.add(emojiBtn);
+        container.add(photoBtn);
+        container.add(fileBtn);
+        container.add(emojiBtn);
+
+        menu.add(container);
 
         menu.show(invoker, 0, -60); // Show above
     }
@@ -1113,13 +1116,28 @@ public class ChatController extends JFrame {
 
     private JButton createRoundButton(String text, String tooltip) {
         JButton btn = new JButton(text);
-        btn.setPreferredSize(new Dimension(40, 40));
+        btn.setPreferredSize(new Dimension(50, 50));
+        btn.setMargin(new Insets(0, 0, 0, 0)); // Fix truncation
         btn.setToolTipText(tooltip);
-        btn.setBackground(ACCENT);
+
+        btn.setBackground(BG_INPUT); // Dark grey background
         btn.setForeground(Color.WHITE);
+
+        btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 20)); // Slightly smaller to fit
         btn.setFocusPainted(false);
-        // Simple rounded border hack
-        btn.setBorder(BorderFactory.createLineBorder(ACCENT));
+        btn.setBorderPainted(false);
+
+        // Add hover effect
+        btn.addMouseListener(new MouseAdapter() {
+            public void mouseEntered(MouseEvent e) {
+                btn.setBackground(ACCENT);
+            }
+
+            public void mouseExited(MouseEvent e) {
+                btn.setBackground(BG_INPUT);
+            }
+        });
+
         return btn;
     }
 
