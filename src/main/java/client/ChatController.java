@@ -49,6 +49,7 @@ public class ChatController extends JFrame {
     private JPanel voicePanel;
     private DefaultListModel<String> voiceUsersModel;
     private JList<String> voiceUsersList;
+    private JProgressBar micLevelBar;
 
     private static final String CONFIG_FILE = "client_config.properties";
 
@@ -285,6 +286,22 @@ public class ChatController extends JFrame {
         voicePanel.add(voiceHeader, BorderLayout.NORTH);
         voicePanel.add(voiceContent, BorderLayout.CENTER);
 
+        // Mic Level Bar (Bottom)
+        JPanel micPanel = new JPanel(new BorderLayout());
+        micPanel.setBackground(BG_DARK);
+        micPanel.setBorder(new EmptyBorder(10, 20, 20, 20));
+
+        micLevelBar = new JProgressBar(0, 100);
+        micLevelBar.setValue(0);
+        micLevelBar.setStringPainted(true);
+        micLevelBar.setString("Test Micro");
+        micLevelBar.setForeground(new Color(46, 204, 113)); // Green
+        micLevelBar.setBackground(new Color(32, 34, 37));
+        micLevelBar.setBorderPainted(false);
+
+        micPanel.add(micLevelBar, BorderLayout.CENTER);
+        voicePanel.add(micPanel, BorderLayout.SOUTH);
+
         centerPanel.add(chatPanel, "CHAT");
         centerPanel.add(voicePanel, "VOICE");
 
@@ -369,6 +386,11 @@ public class ChatController extends JFrame {
                     if (selected.type.equals("VOICE")) {
                         currentChannel = selected.name;
                         networkClient.sendCommand("/join " + selected.name);
+
+                        // Connect Voice Manager
+                        if (voiceManager != null) {
+                            voiceManager.joinChannel(selected.name);
+                        }
 
                         // Switch UI
                         channelLabel.setText(" 🔊 " + currentChannel);
@@ -591,6 +613,7 @@ public class ChatController extends JFrame {
 
         // Init Voice
         voiceManager = new VoiceManager(host);
+        voiceManager.setLevelListener(this::updateMicLevel);
 
         new Thread(networkClient).start();
 
@@ -796,6 +819,14 @@ public class ChatController extends JFrame {
 
     public void addSystemMessage(String text) {
         displayMessage(new Message("System", text, currentChannel, Message.MessageType.SYSTEM));
+    }
+
+    private void updateMicLevel(Double level) {
+        SwingUtilities.invokeLater(() -> {
+            if (micLevelBar != null) {
+                micLevelBar.setValue(level.intValue());
+            }
+        });
     }
 
     public void updateUserList(String[] users) {

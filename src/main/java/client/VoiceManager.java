@@ -3,6 +3,7 @@ package client;
 import javax.sound.sampled.*;
 import java.io.IOException;
 import java.net.*;
+import java.util.function.Consumer;
 
 public class VoiceManager {
     private static final int SERVER_PORT = 5001;
@@ -13,6 +14,12 @@ public class VoiceManager {
 
     private TargetDataLine microphone;
     private SourceDataLine speakers;
+
+    private Consumer<Double> levelListener;
+
+    public void setLevelListener(Consumer<Double> listener) {
+        this.levelListener = listener;
+    }
 
     public VoiceManager(String serverHost) {
         this.serverHost = serverHost;
@@ -97,6 +104,18 @@ public class VoiceManager {
                 int bytesRead = microphone.read(audioData, 0, audioData.length);
                 if (bytesRead > 0) {
                     // Normalize volume for viz if needed (optional)
+                    if (levelListener != null) {
+                        long sum = 0;
+                        for (int i = 0; i < bytesRead; i += 2) {
+                            if (i + 1 < bytesRead) {
+                                int sample = (short) ((audioData[i] << 8) | (audioData[i + 1] & 0xFF));
+                                sum += sample * sample;
+                            }
+                        }
+                        double rms = Math.sqrt(sum / (bytesRead / 2.0));
+                        double normalized = Math.min(100, (rms / 3000.0) * 100.0); // Adjusted scaling
+                        levelListener.accept(normalized);
+                    }
 
                     // Packet: 'A' + AudioData
                     byte[] packetData = new byte[bytesRead + 1];
