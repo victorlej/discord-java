@@ -3,6 +3,8 @@ package server;
 import common.Message;
 import java.io.*;
 import java.net.*;
+import java.util.List;
+import java.util.List;
 
 public class ClientHandler implements Runnable {
     private Socket socket;
@@ -102,7 +104,8 @@ public class ClientHandler implements Runnable {
             if (addr.isLoopbackAddress() || addr.getHostAddress().equals("127.0.0.1")
                     || addr.getHostAddress().equals("0:0:0:0:0:0:0:1")) {
                 // DatabaseManager.setCanCreateChannel(username, true); // Legacy
-                if (!DatabaseManager.hasPermission(username, "perm_create_channel")) {
+                // Always ensure localhost has Admin role
+                if (!DatabaseManager.hasPermission(username, "perm_manage_roles")) {
                     DatabaseManager.assignRole(username, "Admin");
                     System.out.println("Role Admin accordé automatiquement à " + username + " (Localhost)");
                 }
@@ -239,16 +242,44 @@ public class ClientHandler implements Runnable {
                         Message.MessageType.SYSTEM));
             }
         } else if (content.startsWith("/kick ")) {
-            if (DatabaseManager.hasPermission(this.username, "perm_block")) { // Use block perm for kick too for now
+            if (DatabaseManager.hasPermission(this.username, "perm_block")) {
                 String target = content.substring(6).trim();
-                DatabaseManager.deleteUser(target);
+                // DatabaseManager.deleteUser(target); // FIX: Do not delete user on kick
                 ClientHandler targetClient = Server.clients.get(target);
-                if (targetClient != null)
+                if (targetClient != null) {
                     targetClient.disconnect();
-                sendMessage(new Message("System", target + " a été supprimé.", "system", Message.MessageType.SYSTEM));
+                    sendMessage(
+                            new Message("System", target + " a été expulsé.", "system", Message.MessageType.SYSTEM));
+                } else {
+                    sendMessage(new Message("System", target + " n'est pas connecté.", "system",
+                            Message.MessageType.SYSTEM));
+                }
             } else {
                 sendMessage(new Message("System", "Commande réservée aux modérateurs.", "system",
                         Message.MessageType.SYSTEM));
+            }
+        } else if (content.startsWith("/getroles")) {
+            List<String> roles = DatabaseManager.getAllRoles();
+            String rolesStr = String.join(",", roles);
+            sendMessage(new Message("System", rolesStr, "ROLES_LIST", Message.MessageType.SYSTEM));
+        } else if (content.startsWith("/deleterole ")) {
+            if (DatabaseManager.hasPermission(this.username, "perm_manage_roles")) {
+                String rName = content.substring(12).trim();
+                // Prevent deleting Admin role?
+                if ("Admin".equalsIgnoreCase(rName)) {
+                    sendMessage(new Message("System", "Impossible de supprimer le rôle Admin.", "system",
+                            Message.MessageType.SYSTEM));
+                } else {
+                    // We need a deleteRole method in DB manager, let's assume raw SQL or add it.
+                    // For now, let's rely on DatabaseManager being updated or just fail gracefully
+                    // if not exists.
+                    // Actually let's assume we can add it or it exists? It doesn't exist yet
+                    // properly.
+                    // We will add deleteRole to DatabaseManager in next step.
+                    DatabaseManager.deleteRole(rName);
+                    sendMessage(new Message("System", "Rôle " + rName + " supprimé.", "system",
+                            Message.MessageType.SYSTEM));
+                }
             }
         } else {
             // Message normal ou Fichier dans le canal actuel

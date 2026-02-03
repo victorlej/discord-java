@@ -113,7 +113,14 @@ public class VoiceManager {
                             }
                         }
                         double rms = Math.sqrt(sum / (bytesRead / 2.0));
-                        double normalized = Math.min(100, (rms / 3000.0) * 100.0); // Adjusted scaling
+                        // Increased sensitivity: normalized relative to 500.0 instead of 2000.0
+                        double normalized = Math.min(100, (rms / 500.0) * 100.0);
+
+                        // Debug log every ~1 sec (approx every 20 packets)
+                        if (System.currentTimeMillis() % 1000 < 50) {
+                            System.out.println("[VoiceManager] RMS: " + (int) rms + " -> Level: " + (int) normalized);
+                        }
+
                         levelListener.accept(normalized);
                     }
 

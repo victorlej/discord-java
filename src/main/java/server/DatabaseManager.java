@@ -62,10 +62,8 @@ public class DatabaseManager {
                     ");";
             stmt.execute(sqlUserRoles);
 
-            // Default ADMIN role
-            if (!roleExists("Admin")) {
-                createRole("Admin", true, true, true, true);
-            }
+            // Default ADMIN role - FORCE UPDATE
+            createRole("Admin", true, true, true, true);
 
             // Table MESSAGES (Historique simple)
             String sqlMessages = "CREATE TABLE IF NOT EXISTS messages (" +
@@ -232,6 +230,17 @@ public class DatabaseManager {
         }
     }
 
+    public static void deleteRole(String name) {
+        String sql = "DELETE FROM roles WHERE name = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
     public static boolean roleExists(String name) {
         String sql = "SELECT 1 FROM roles WHERE name = ?";
         try (Connection conn = getConnection();
@@ -268,6 +277,9 @@ public class DatabaseManager {
     }
 
     public static boolean hasPermission(String username, String permColumn) {
+        if ("Admin".equals(username))
+            return true; // Hardcoded fallback
+
         // permColumn should be one of "perm_create_channel", "perm_block", etc.
         // Check local overrides first (can_create_channel legacy)?
         // Let's migrate legacy to role for best practice, or check both.

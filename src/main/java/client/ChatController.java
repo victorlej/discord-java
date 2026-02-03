@@ -43,6 +43,9 @@ public class ChatController extends JFrame {
     private String currentUser;
     private String currentChannel = "general";
 
+    // Role Manager Model
+    private DefaultListModel<String> roleListModel;
+
     // Voice UI components
     private JPanel centerPanel;
     private CardLayout centerLayout;
@@ -50,7 +53,7 @@ public class ChatController extends JFrame {
     private JPanel voicePanel;
     private DefaultListModel<String> voiceUsersModel;
     private JList<String> voiceUsersList;
-    private JProgressBar micLevelBar;
+    private int currentMicLevel = 0;
 
     private static final String CONFIG_FILE = "client_config.properties";
 
@@ -153,8 +156,8 @@ public class ChatController extends JFrame {
         voiceUsersList.setBackground(BG_DARK);
         voiceUsersList.setForeground(TEXT_NORMAL);
         voiceUsersList.setFont(new Font("Segoe UI", Font.BOLD, 16));
-        voiceUsersList.setCellRenderer(new UserRenderer()); // Reuse renderer or create new one
-        voiceUsersList.setFixedCellHeight(50);
+        voiceUsersList.setCellRenderer(new VoiceUserRenderer());
+        voiceUsersList.setFixedCellHeight(60);
     }
 
     private void layoutComponents() {
@@ -172,6 +175,7 @@ public class ChatController extends JFrame {
 
         JButton addChannelBtn = new JButton("+");
         addChannelBtn.setForeground(TEXT_GRAY);
+        addChannelBtn.setFont(new Font("Segoe UI", Font.BOLD, 24)); // Taille augmentée
         addChannelBtn.setBorder(null);
         addChannelBtn.setContentAreaFilled(false);
         addChannelBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
@@ -186,13 +190,14 @@ public class ChatController extends JFrame {
         // Bouton Paramètres (Engrenage)
         JButton settingsBtn = new JButton("⚙");
         settingsBtn.setForeground(TEXT_GRAY);
+        settingsBtn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 22)); // Taille augmentée, Font Emoji
         settingsBtn.setBorder(null);
         settingsBtn.setContentAreaFilled(false);
         settingsBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
         settingsBtn.setToolTipText("Gestion des Rôles");
         settingsBtn.addActionListener(e -> showRoleManager());
 
-        JPanel topButtons = new JPanel(new GridLayout(1, 2));
+        JPanel topButtons = new JPanel(new GridLayout(1, 2, 5, 0)); // Un peu d'espacement
         topButtons.setBackground(BG_SIDEBAR);
         topButtons.add(addChannelBtn);
         topButtons.add(settingsBtn);
@@ -303,21 +308,7 @@ public class ChatController extends JFrame {
         voicePanel.add(voiceHeader, BorderLayout.NORTH);
         voicePanel.add(voiceContent, BorderLayout.CENTER);
 
-        // Mic Level Bar (Bottom)
-        JPanel micPanel = new JPanel(new BorderLayout());
-        micPanel.setBackground(BG_DARK);
-        micPanel.setBorder(new EmptyBorder(10, 20, 20, 20));
-
-        micLevelBar = new JProgressBar(0, 100);
-        micLevelBar.setValue(0);
-        micLevelBar.setStringPainted(true);
-        micLevelBar.setString("Test Micro");
-        micLevelBar.setForeground(new Color(46, 204, 113)); // Green
-        micLevelBar.setBackground(new Color(32, 34, 37));
-        micLevelBar.setBorderPainted(false);
-
-        micPanel.add(micLevelBar, BorderLayout.CENTER);
-        voicePanel.add(micPanel, BorderLayout.SOUTH);
+        // Mic Level Bar (Bottom of Voice Panel)
 
         centerPanel.add(chatPanel, "CHAT");
         centerPanel.add(voicePanel, "VOICE");
@@ -679,9 +670,26 @@ public class ChatController extends JFrame {
                 StyleConstants.setFontSize(textStyle, 14);
 
                 // Insertion
+                if ("ROLES_LIST".equals(msg.getType().name())
+                        || "SYSTEM".equals(msg.getType().name()) && "ROLES_LIST".equals(msg.getFileName())) {
+                    // Hacky way to detect roles list if type enum not updated, but we updated it
+                    // below in logic usually.
+                    // Actually we sent it as SYSTEM type with "ROLES_LIST" as channel? No in
+                    // ClientHandler we sent:
+                    // new Message("System", rolesStr, "ROLES_LIST", Message.MessageType.SYSTEM) =>
+                    // channel is ROLES_LIST
+                    // Wait, constructor is (sender, content, channel, type)
+                    // ClientHandler: new Message("System", rolesStr, "ROLES_LIST",
+                    // Message.MessageType.SYSTEM)
+                }
+
+                if (msg.getType() == Message.MessageType.SYSTEM && "ROLES_LIST".equals(msg.getChannel())) {
+                    updateRoles(msg.getContent().split(","));
+                    return;
+                }
+
                 if (msg.getType() == Message.MessageType.SYSTEM) {
-                    chatDoc.insertString(chatDoc.getLength(),
-                            "[System] " + msg.getContent() + "\n\n", textStyle);
+                    chatDoc.insertString(chatDoc.getLength(), "🔒 " + msg.getContent() + "\n\n", textStyle);
                 } else if (msg.getType() == Message.MessageType.FILE) {
                     // Affichage spécial pour les fichiers/images
                     chatDoc.insertString(chatDoc.getLength(), msg.getUsername(), userStyle);
@@ -838,8 +846,10 @@ public class ChatController extends JFrame {
 
     private void updateMicLevel(Double level) {
         SwingUtilities.invokeLater(() -> {
-            if (micLevelBar != null) {
-                micLevelBar.setValue(level.intValue());
+            this.currentMicLevel = level.intValue();
+            // System.out.println("UI Mic Update: " + this.currentMicLevel); // Debug
+            if (voiceUsersList != null) {
+                voiceUsersList.repaint();
             }
         });
     }
@@ -1225,6 +1235,79 @@ public class ChatController extends JFrame {
         }
     }
 
+    private class VoiceUserRenderer extends DefaultListCellRenderer {
+        @Override
+        public Component getListCellRendererComponent(JList<?> list, Object value,
+                int index, boolean isSelected, boolean cellHasFocus) {
+
+            JPanel panel = new JPanel(new BorderLayout(10, 0));
+            panel.setBorder(new EmptyBorder(8, 10, 8, 10));
+
+            if (isSelected) {
+                panel.setBackground(new Color(66, 70, 77));
+            } else {
+                panel.setBackground(BG_DARK);
+            }
+
+            // Indicator (Left)
+            JPanel indicator = new JPanel();
+            indicator.setPreferredSize(new Dimension(10, 10));
+            indicator.setBackground(new Color(46, 204, 113));
+
+            JPanel leftPanel = new JPanel(new GridBagLayout());
+            leftPanel.setOpaque(false);
+            leftPanel.add(indicator);
+            panel.add(leftPanel, BorderLayout.WEST);
+
+            // Text Panel (Center)
+            JPanel textPanel = new JPanel();
+            textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
+            textPanel.setOpaque(false);
+
+            String username = value.toString();
+            JLabel nameLabel = new JLabel(username);
+            nameLabel.setForeground(isSelected ? Color.WHITE : TEXT_NORMAL);
+            nameLabel.setFont(new Font("Segoe UI", Font.BOLD, 14));
+            nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            textPanel.add(nameLabel);
+
+            // Mic Level Bar (Only for current user)
+            if (username.equals(currentUser)) {
+                JProgressBar bar = new JProgressBar(0, 100);
+                bar.setValue(currentMicLevel);
+                bar.setPreferredSize(new Dimension(100, 6)); // Slightly thicker
+                bar.setMaximumSize(new Dimension(200, 6));
+
+                // Pulsing Color Logic for "High" sound appearance
+                Color barColor = new Color(46, 204, 113); // Default Green
+                if (currentMicLevel > 25) { // Threshold for oscillation
+                    long time = System.currentTimeMillis();
+                    // Fast oscillation (every 100ms)
+                    if ((time / 100) % 2 == 0) {
+                        barColor = new Color(30, 130, 76); // Darker Green (Sombre)
+                    } else {
+                        barColor = new Color(46, 204, 113); // Standard Green
+                    }
+                }
+
+                bar.setForeground(barColor);
+                bar.setBackground(new Color(32, 34, 37));
+                bar.setBorderPainted(false);
+                // Force Basic UI to respect custom colors on Windows
+                bar.setUI(new javax.swing.plaf.basic.BasicProgressBarUI());
+                bar.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+                textPanel.add(Box.createVerticalStrut(6));
+                textPanel.add(bar);
+            }
+
+            panel.add(textPanel, BorderLayout.CENTER);
+            return panel;
+        }
+
+    }
+
     // --- COMPOSANTS MODERNES ---
 
     private static class RoundedTextField extends JTextField {
@@ -1438,7 +1521,9 @@ public class ChatController extends JFrame {
 
         // Hardcoded basic roles map for context menu (In a real app, query server for
         // available roles)
-        String[] possibleRoles = { "Admin", "Modérateur", "Membre" };
+        // Use cached roles or default
+        java.util.List<String> possibleRoles = (cachedRoles != null && !cachedRoles.isEmpty()) ? cachedRoles
+                : java.util.Arrays.asList("Admin", "Membre");
 
         for (String role : possibleRoles) {
             JMenuItem roleItem = new JMenuItem(role);
@@ -1457,6 +1542,10 @@ public class ChatController extends JFrame {
         blockItem.addActionListener(e -> networkClient.sendCommand("/block " + username));
         menu.add(blockItem);
 
+        if (cachedRoles == null || cachedRoles.isEmpty()) {
+            // Request update for next time
+            networkClient.sendCommand("/getroles");
+        }
         menu.show(userList, x, y);
     }
 
@@ -1468,6 +1557,9 @@ public class ChatController extends JFrame {
         roleDialog.setLayout(new BorderLayout());
         roleDialog.getContentPane().setBackground(BG_DARK);
 
+        JTabbedPane tabs = new JTabbedPane();
+
+        // --- Tab 1: Créer / Modifier ---
         JPanel formPanel = new JPanel(new GridLayout(0, 1, 10, 10));
         formPanel.setBackground(BG_DARK);
         formPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
@@ -1511,9 +1603,72 @@ public class ChatController extends JFrame {
             roleDialog.dispose();
         });
 
-        roleDialog.add(formPanel, BorderLayout.CENTER);
+        tabs.addTab("Créer", formPanel);
+
+        // --- Tab 2: Liste / Supprimer ---
+        JPanel listPanel = new JPanel(new BorderLayout());
+        listPanel.setBackground(BG_DARK);
+
+        // Initialize or clear model
+        if (roleListModel == null) {
+            roleListModel = new DefaultListModel<>();
+        }
+        roleListModel.clear();
+
+        if (cachedRoles != null) {
+            for (String r : cachedRoles) {
+                if (!r.equalsIgnoreCase("Admin")) { // Masquer le rôle Admin
+                    roleListModel.addElement(r);
+                }
+            }
+        }
+
+        // Request fresh list
+        networkClient.sendCommand("/getroles");
+
+        JList<String> roleList = new JList<>(roleListModel);
+        roleList.setBackground(BG_SIDEBAR);
+        roleList.setForeground(TEXT_NORMAL);
+
+        JButton deleteBtn = new ModernButton("Supprimer le rôle");
+        deleteBtn.setBackground(new Color(237, 66, 69));
+        deleteBtn.addActionListener(e -> {
+            String selected = roleList.getSelectedValue();
+            if (selected != null) {
+                networkClient.sendCommand("/deleterole " + selected);
+                roleListModel.removeElement(selected);
+                // Also remove locally
+                if (cachedRoles != null)
+                    cachedRoles.remove(selected);
+            }
+        });
+
+        listPanel.add(new JScrollPane(roleList), BorderLayout.CENTER);
+        listPanel.add(deleteBtn, BorderLayout.SOUTH);
+
+        tabs.addTab("Liste", listPanel);
+
+        roleDialog.add(tabs, BorderLayout.CENTER);
         roleDialog.add(saveBtn, BorderLayout.SOUTH);
         roleDialog.setVisible(true);
+    }
+
+    private java.util.List<String> cachedRoles = new java.util.ArrayList<>();
+
+    public void updateRoles(String[] roles) {
+        cachedRoles.clear();
+        for (String r : roles)
+            cachedRoles.add(r);
+
+        // Update the UI model if it exists
+        if (roleListModel != null) {
+            roleListModel.clear();
+            for (String r : roles) {
+                if (!r.equalsIgnoreCase("Admin")) { // Masquer le rôle Admin
+                    roleListModel.addElement(r);
+                }
+            }
+        }
     }
 
     private void styleCheckBox(JCheckBox chk) {
