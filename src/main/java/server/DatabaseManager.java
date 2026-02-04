@@ -126,6 +126,20 @@ public class DatabaseManager {
         }
     }
 
+    public static boolean updatePassword(String username, String newPassword) {
+        String sql = "UPDATE users SET password = ? WHERE username = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newPassword);
+            pstmt.setString(2, username);
+            pstmt.executeUpdate();
+            return true;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
     public static boolean authenticateUser(String username, String password) {
         String sql = "SELECT password FROM users WHERE username = ?";
         try (Connection conn = getConnection();

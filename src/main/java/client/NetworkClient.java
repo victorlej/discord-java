@@ -104,8 +104,19 @@ public class NetworkClient implements Runnable {
             String usersCsv = msg.getContent();
             String[] users = (usersCsv == null || usersCsv.isEmpty()) ? new String[0] : usersCsv.split(",");
             controller.updateVoiceUsers(msg.getChannel(), users);
+        } else if (msg.getType() == Message.MessageType.STATUS_UPDATE) {
+            String user = msg.getUsername();
+            String status = msg.getContent();
+            controller.updateUserStatus(user, status);
         } else {
-            controller.displayMessage(msg);
+            // Check for Roles List special channel name hack (from ClientHandler code)
+            if ("ROLES_LIST".equals(msg.getChannel())) {
+                String rolesCsv = msg.getContent();
+                String[] roles = (rolesCsv == null || rolesCsv.isEmpty()) ? new String[0] : rolesCsv.split(",");
+                controller.updateRoles(roles);
+            } else {
+                controller.displayMessage(msg);
+            }
         }
     }
 

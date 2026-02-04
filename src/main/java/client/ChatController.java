@@ -32,6 +32,7 @@ public class ChatController extends JFrame {
     private int hoveredChannelIndex = -1;
     private int hoveredUserIndex = -1;
     private Map<String, Boolean> talkingStates = new HashMap<>();
+    private Map<String, String> userStatuses = new HashMap<>(); // Stores status: ONLINE, IDLE, DND
 
     private JTextPane chatArea;
     private RoundedTextField inputField; // Changed to custom component
@@ -120,6 +121,90 @@ public class ChatController extends JFrame {
 
     private static final String CONFIG_FILE = "client_config.properties";
 
+    public void updateUserStatus(String username, String status) {
+        userStatuses.put(username, status);
+        SwingUtilities.invokeLater(() -> {
+            if (userList != null)
+                userList.repaint();
+        });
+    }
+
+    private void showUserProfile() {
+        JDialog dialog = new JDialog(this, "Mon Profil", true);
+        dialog.setSize(400, 350);
+        dialog.setLocationRelativeTo(this);
+        dialog.getContentPane().setBackground(BG_DARK);
+        dialog.setLayout(new BoxLayout(dialog.getContentPane(), BoxLayout.Y_AXIS));
+        ((JPanel) dialog.getContentPane()).setBorder(new EmptyBorder(20, 20, 20, 20));
+
+        JLabel title = new JLabel("Profil de " + currentUser);
+        title.setForeground(Color.WHITE);
+        title.setFont(new Font("Segoe UI", Font.BOLD, 18));
+        title.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        // Avatar Preview
+        JLabel avatar = new JLabel(ModernComponents.generateAvatar(currentUser, 64));
+        avatar.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        // Status Selector
+        JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        statusPanel.setBackground(BG_DARK);
+        statusPanel.setBorder(BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(TEXT_GRAY), "Statut", 0, 0, new Font("Segoe UI", Font.PLAIN, 12),
+                TEXT_GRAY));
+
+        String[] statuses = { "En Ligne", "Absent", "Ne pas déranger" };
+        JComboBox<String> statusBox = new JComboBox<>(statuses);
+        statusBox.addActionListener(e -> {
+            String selected = (String) statusBox.getSelectedItem();
+            String code = "ONLINE";
+            if (selected.equals("Absent"))
+                code = "IDLE";
+            if (selected.equals("Ne pas déranger"))
+                code = "DND";
+            networkClient.sendCommand("/status " + code);
+            updateUserStatus(currentUser, code); // Optimistic update
+        });
+        statusPanel.add(statusBox);
+
+        // Password Change
+        JPanel passPanel = new JPanel(new GridLayout(2, 2, 5, 5));
+        passPanel.setBackground(BG_DARK);
+        passPanel.setBorder(BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(TEXT_GRAY), "Changer le mot de passe", 0, 0,
+                new Font("Segoe UI", Font.PLAIN, 12), TEXT_GRAY));
+
+        JPasswordField newPass = new JPasswordField();
+        JButton changeBtn = new ModernComponents.ModernButton("Valider");
+        changeBtn.addActionListener(e -> {
+            String p = new String(newPass.getPassword());
+            if (!p.isEmpty()) {
+                networkClient.sendCommand("/passwd " + p); // Simplified: just send new pass for now (demo)
+                JOptionPane.showMessageDialog(dialog, "Demande envoyée.");
+                newPass.setText("");
+            }
+        });
+
+        passPanel.add(new JLabel("Nouveau :"));
+        passPanel.add(newPass);
+        passPanel.add(new JPanel() {
+            {
+                setOpaque(false);
+            }
+        }); // Spacer
+        passPanel.add(changeBtn);
+
+        dialog.add(avatar);
+        dialog.add(Box.createVerticalStrut(10));
+        dialog.add(title);
+        dialog.add(Box.createVerticalStrut(20));
+        dialog.add(statusPanel);
+        dialog.add(Box.createVerticalStrut(20));
+        dialog.add(passPanel);
+
+        dialog.setVisible(true);
+    }
+
     public ChatController() {
         setTitle("Discord Java - Client (v2.0)");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -134,6 +219,49 @@ public class ChatController extends JFrame {
 
         // Connexion au démarrage
         SwingUtilities.invokeLater(this::connectToServer);
+
+        // Drag & Drop Support
+        new java.awt.dnd.DropTarget(this, new java.awt.dnd.DropTargetAdapter() {
+            public void drop(java.awt.dnd.DropTargetDropEvent dtde) {
+                try {
+                    dtde.acceptDrop(java.awt.dnd.DnDConstants.ACTION_COPY);
+                    java.util.List<File> droppedFiles = (java.util.List<File>) dtde.getTransferable()
+                            .getTransferData(java.awt.datatransfer.DataFlavor.javaFileListFlavor);
+
+                    for (File file : droppedFiles) {
+                        if (file.isDirectory())
+                            continue;
+
+                        // Confirm upload
+                        int confirm = JOptionPane.showConfirmDialog(ChatController.this,
+                                "Envoyer le fichier : " + file.getName() + " ?",
+                                "Confirmation d'envoi", JOptionPane.YES_NO_OPTION);
+
+                        if (confirm == JOptionPane.YES_OPTION) {
+                            if (file.length() > 5 * 1024 * 1024) { // 5MB limit
+                                JOptionPane.showMessageDialog(ChatController.this, "Fichier trop volumineux (Max 5MB)");
+                                continue;
+                            }
+                            // Logic similar to selectAndSendFile
+                            new Thread(() -> {
+                                try (FileInputStream fis = new FileInputStream(file)) {
+                                    byte[] data = new byte[(int) file.length()];
+                                    fis.read(data);
+                                    Message msg = new Message(currentUser, file.getName(), data, currentChannel,
+                                            Message.MessageType.FILE);
+                                    networkClient.sendMessage(msg);
+                                } catch (IOException e) {
+                                    e.printStackTrace();
+                                    addSystemMessage("Erreur lecture fichier: " + e.getMessage());
+                                }
+                            }).start();
+                        }
+                    }
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                }
+            }
+        });
     }
 
     private void initComponents() {
@@ -260,9 +388,20 @@ public class ChatController extends JFrame {
         settingsBtn.setToolTipText("Gestion des Rôles");
         settingsBtn.addActionListener(e -> showRoleManager());
 
-        JPanel topButtons = new JPanel(new GridLayout(1, 2, 5, 0)); // Un peu d'espacement
+        JPanel topButtons = new JPanel(new GridLayout(1, 3, 5, 0)); // Un peu d'espacement
         topButtons.setBackground(BG_SIDEBAR);
         topButtons.add(addChannelBtn);
+
+        JButton profileBtn = new JButton("👤");
+        profileBtn.setForeground(TEXT_GRAY);
+        profileBtn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 20));
+        profileBtn.setBorder(null);
+        profileBtn.setContentAreaFilled(false);
+        profileBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        profileBtn.setToolTipText("Mon Profil");
+        profileBtn.addActionListener(e -> showUserProfile());
+
+        topButtons.add(profileBtn);
         topButtons.add(settingsBtn);
 
         headerContainer.add(topButtons, BorderLayout.EAST);
@@ -1473,7 +1612,17 @@ public class ChatController extends JFrame {
             // Indicateur vert (Status)
             JPanel indicator = new JPanel();
             indicator.setPreferredSize(new Dimension(10, 10));
-            indicator.setBackground(new Color(46, 204, 113)); // Vert online
+
+            // Determine color based on status
+            String status = userStatuses.getOrDefault(value.toString(), "ONLINE");
+            Color statusColor = new Color(46, 204, 113); // Default Green
+
+            if ("IDLE".equals(status))
+                statusColor = new Color(250, 166, 26); // Orange
+            else if ("DND".equals(status))
+                statusColor = new Color(237, 66, 69); // Red
+
+            indicator.setBackground(statusColor);
             // Petit contour pour que ça ressorte
             indicator.setBorder(null);
 

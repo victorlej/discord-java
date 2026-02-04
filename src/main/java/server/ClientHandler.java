@@ -277,6 +277,23 @@ public class ClientHandler implements Runnable {
                     sendRolesList(); // Update client
                 }
             }
+        } else if (content.startsWith("/status")) {
+            String[] parts = content.split(" ");
+            if (parts.length >= 2) {
+                String newStatus = parts[1].toUpperCase();
+                // Diffuser le statut à tous les clients connectés (global broadcast)
+                Message statusMsg = new Message(this.username, newStatus, "GLOBAL", Message.MessageType.STATUS_UPDATE);
+                for (ClientHandler client : Server.clients.values()) {
+                    client.sendMessage(statusMsg);
+                }
+            }
+        } else if (content.startsWith("/passwd")) {
+            String[] parts = content.split(" ", 2);
+            if (parts.length >= 2) {
+                String newPass = parts[1];
+                DatabaseManager.updatePassword(this.username, newPass);
+                sendMessage(new Message("System", "Mot de passe mis à jour.", "system", Message.MessageType.SYSTEM));
+            }
         } else {
             // Message normal ou Fichier dans le canal actuel
             if (currentChannel != null) {
