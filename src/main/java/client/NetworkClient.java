@@ -103,7 +103,7 @@ public class NetworkClient implements Runnable {
         } else if (msg.getType() == Message.MessageType.CHANNEL_USERS) {
             String usersCsv = msg.getContent();
             String[] users = (usersCsv == null || usersCsv.isEmpty()) ? new String[0] : usersCsv.split(",");
-            controller.updateVoiceUsers(users);
+            controller.updateVoiceUsers(msg.getChannel(), users);
         } else {
             controller.displayMessage(msg);
         }

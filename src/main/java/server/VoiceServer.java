@@ -54,6 +54,8 @@ public class VoiceServer implements Runnable {
                 } else if (type == 'A') { // AUDIO
                     // System.out.println("[VoiceServer] Audio from " + sender); // Spammy
                     handleAudio(sender, packet);
+                } else if (type == 'T') { // TALK STATUS
+                    handleForward(sender, packet);
                 }
 
             } catch (IOException e) {
@@ -64,9 +66,21 @@ public class VoiceServer implements Runnable {
     }
 
     private void handleJoin(SocketAddress sender, String channelName) {
-        handleLeave(sender);
+        // Force leave ANY channel before joining new one
+        String current = clientChannels.get(sender);
+        if (current != null && !current.equals(channelName)) {
+            handleLeave(sender);
+        } else if (current != null && current.equals(channelName)) {
+            return; // Already in this channel, ignore? Or update?
+        }
+
+        handleLeave(sender); // Just to be safe/clean
         channels.computeIfAbsent(channelName, k -> Collections.synchronizedSet(new HashSet<>())).add(sender);
         clientChannels.put(sender, channelName);
+
+        // Broadcast user list update via ClientHandler/Server mechanisms?
+        // Voice Server is separate (UDP), doesn't easily talk to TCP Server.
+        // We rely on Client calling /join X on TCP side to update user lists.
     }
 
     private void handleLeave(SocketAddress sender) {
@@ -83,6 +97,10 @@ public class VoiceServer implements Runnable {
     }
 
     private void handleAudio(SocketAddress sender, DatagramPacket originalPacket) {
+        handleForward(sender, originalPacket);
+    }
+
+    private void handleForward(SocketAddress sender, DatagramPacket originalPacket) {
         String channel = clientChannels.get(sender);
         if (channel != null) {
             Set<SocketAddress> recipients = channels.get(channel);
@@ -90,8 +108,6 @@ public class VoiceServer implements Runnable {
                 synchronized (recipients) {
                     for (SocketAddress recipient : recipients) {
                         // Forward to everyone ELSE.
-                        // Note: If running multiple clients on same machine with different ports,
-                        // sender address WILL distinguish them correctly.
                         if (!recipient.equals(sender)) {
                             try {
                                 DatagramPacket forward = new DatagramPacket(

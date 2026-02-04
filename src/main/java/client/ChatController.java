@@ -10,8 +10,10 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.URI;
-import java.net.URL; // Added URL import
+import java.net.URL;
 import java.util.Properties;
+import java.util.Map;
+import java.util.HashMap;
 import java.io.FileOutputStream;
 import common.Message;
 
@@ -29,19 +31,76 @@ public class ChatController extends JFrame {
 
     private int hoveredChannelIndex = -1;
     private int hoveredUserIndex = -1;
+    private Map<String, Boolean> talkingStates = new HashMap<>();
 
     private JTextPane chatArea;
     private RoundedTextField inputField; // Changed to custom component
-    private JList<ChannelItem> channelList;
-    private JList<String> userList;
-    private DefaultListModel<ChannelItem> channelModel;
-    private DefaultListModel<String> userModel;
-    private StyledDocument chatDoc;
-
-    private NetworkClient networkClient;
     private VoiceManager voiceManager; // Voice Manager
     private String currentUser;
     private String currentChannel = "general";
+
+    // Sidebar Model
+    private DefaultListModel<SidebarItem> channelModel;
+    private JList<SidebarItem> channelList;
+
+    // Restored Fields
+    private JList<String> userList;
+    private DefaultListModel<String> userModel;
+    private StyledDocument chatDoc;
+    private NetworkClient networkClient;
+
+    public interface SidebarItem {
+        boolean isChannel();
+
+        String getName();
+    }
+
+    public static class ChannelItem implements SidebarItem {
+        String name;
+        String type;
+
+        public ChannelItem(String name, String type) {
+            this.name = name;
+            this.type = type;
+        }
+
+        public boolean isChannel() {
+            return true;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String toString() {
+            return name;
+        }
+    }
+
+    public static class VoiceUserItem implements SidebarItem {
+        String username;
+        boolean isTalking = false; // New: Speaking status
+
+        public VoiceUserItem(String username) {
+            this.username = username;
+        }
+
+        public boolean isChannel() {
+            return false;
+        }
+
+        public String getName() {
+            return username;
+        }
+
+        public String toString() {
+            return username;
+        }
+
+        public void setTalking(boolean talking) {
+            this.isTalking = talking;
+        }
+    }
 
     // Role Manager Model
     private DefaultListModel<String> roleListModel;
@@ -54,6 +113,10 @@ public class ChatController extends JFrame {
     private DefaultListModel<String> voiceUsersModel;
     private JList<String> voiceUsersList;
     private int currentMicLevel = 0;
+
+    // Voice Sidebar Controls
+    private JPanel voiceControlPanel;
+    private JLabel voiceStatusLabel;
 
     private static final String CONFIG_FILE = "client_config.properties";
 
@@ -87,7 +150,7 @@ public class ChatController extends JFrame {
         inputField.setForeground(TEXT_NORMAL);
         inputField.setCaretColor(Color.WHITE);
         inputField.setBorder(new EmptyBorder(10, 15, 10, 15));
-        inputField.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        inputField.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 14));
 
         // Listes
         channelModel = new DefaultListModel<>();
@@ -100,7 +163,7 @@ public class ChatController extends JFrame {
         channelList.setSelectionBackground(new Color(66, 70, 77));
         channelList.setSelectionForeground(Color.WHITE);
         channelList.setFont(new Font("Segoe UI", Font.BOLD, 14));
-        channelList.setCellRenderer(new ChannelRenderer());
+        channelList.setCellRenderer(new SidebarRenderer());
         channelList.setFixedCellHeight(35); // Hauteur fixe pour aérer
         // channelList.setSelectedIndex(0); // Don't select until loaded
 
@@ -208,11 +271,47 @@ public class ChatController extends JFrame {
         JScrollPane channelScroll = new JScrollPane(channelList);
         channelScroll.setBorder(null);
         channelScroll.setBackground(BG_SIDEBAR);
-        channelScroll.getVerticalScrollBar().setUI(new SleekScrollBarUI());
+        channelScroll.getVerticalScrollBar().setUI(new ModernComponents.SleekScrollBarUI());
         channelScroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
 
         leftPanel.add(headerContainer, BorderLayout.NORTH);
         leftPanel.add(channelScroll, BorderLayout.CENTER);
+
+        // Voice Control Panel (Bottom Sidebar)
+        voiceControlPanel = new JPanel(new BorderLayout());
+        voiceControlPanel.setBackground(new Color(32, 34, 37)); // Darker than sidebar
+        voiceControlPanel.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(25, 27, 30)));
+        voiceControlPanel.setVisible(false);
+        voiceControlPanel.setPreferredSize(new Dimension(0, 50));
+
+        JPanel voiceInfo = new JPanel(new GridLayout(2, 1));
+        voiceInfo.setOpaque(false);
+        voiceInfo.setBorder(new EmptyBorder(5, 10, 5, 0));
+
+        JLabel voiceTitle = new JLabel("Connexion Vocale");
+        voiceTitle.setForeground(new Color(46, 204, 113)); // Green
+        voiceTitle.setFont(new Font("Segoe UI", Font.BOLD, 12));
+
+        voiceStatusLabel = new JLabel("Salon");
+        voiceStatusLabel.setForeground(TEXT_NORMAL);
+        voiceStatusLabel.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+
+        voiceInfo.add(voiceTitle);
+        voiceInfo.add(voiceStatusLabel);
+
+        JButton sidebarHangUp = new JButton("❌");
+        sidebarHangUp.setForeground(Color.RED);
+        sidebarHangUp.setBorderPainted(false);
+        sidebarHangUp.setContentAreaFilled(false);
+        sidebarHangUp.setFocusPainted(false);
+        sidebarHangUp.setFont(new Font("Segoe UI Emoji", Font.BOLD, 16));
+        sidebarHangUp.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        sidebarHangUp.addActionListener(e -> leaveVoiceChannel());
+
+        voiceControlPanel.add(voiceInfo, BorderLayout.CENTER);
+        voiceControlPanel.add(sidebarHangUp, BorderLayout.EAST);
+
+        leftPanel.add(voiceControlPanel, BorderLayout.SOUTH);
 
         // Create Chat Panel Components (Header, Scroll, Input)
         // ----------------------------------------------------
@@ -229,12 +328,14 @@ public class ChatController extends JFrame {
         channelLabel.setBorder(new EmptyBorder(0, 20, 0, 0));
         headerPanel.add(channelLabel, BorderLayout.WEST);
 
+        headerPanel.add(new JPanel(), BorderLayout.EAST);
+
         // Zone messages
         JScrollPane chatScroll = new JScrollPane(chatArea);
         chatScroll.setBorder(null);
         chatScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
         chatScroll.getVerticalScrollBar().setBackground(BG_DARK);
-        chatScroll.getVerticalScrollBar().setUI(new SleekScrollBarUI());
+        chatScroll.getVerticalScrollBar().setUI(new ModernComponents.SleekScrollBarUI());
         chatScroll.getVerticalScrollBar().setPreferredSize(new Dimension(10, 0));
 
         // Panel input
@@ -256,7 +357,7 @@ public class ChatController extends JFrame {
         inputPanel.add(shareBtn, BorderLayout.WEST);
         inputPanel.add(inputField, BorderLayout.CENTER);
 
-        JButton sendButton = new ModernButton("Envoyer");
+        JButton sendButton = new ModernComponents.ModernButton("Envoyer");
         sendButton.setBorder(new EmptyBorder(10, 20, 10, 20));
         sendButton.addActionListener(e -> sendMessage());
         inputPanel.add(sendButton, BorderLayout.EAST);
@@ -289,6 +390,15 @@ public class ChatController extends JFrame {
         voiceLabel.setBorder(new EmptyBorder(0, 20, 0, 0));
         voiceHeader.add(voiceLabel, BorderLayout.WEST);
 
+        JButton headerHangUp = new JButton("❌");
+        headerHangUp.setToolTipText("Raccrocher");
+        headerHangUp.setBorderPainted(false);
+        headerHangUp.setContentAreaFilled(false);
+        headerHangUp.setForeground(Color.RED);
+        headerHangUp.setFont(new Font("Segoe UI Emoji", Font.BOLD, 16));
+        headerHangUp.addActionListener(ev -> leaveVoiceChannel());
+        voiceHeader.add(headerHangUp, BorderLayout.EAST);
+
         JPanel voiceContent = new JPanel(new BorderLayout());
         voiceContent.setBackground(BG_DARK);
         voiceContent.setBorder(new EmptyBorder(20, 20, 20, 20));
@@ -308,6 +418,21 @@ public class ChatController extends JFrame {
         voicePanel.add(voiceHeader, BorderLayout.NORTH);
         voicePanel.add(voiceContent, BorderLayout.CENTER);
 
+        // Controls Panel (Hang Up)
+        JPanel controlsPanel = new JPanel();
+        controlsPanel.setBackground(BG_DARK);
+        controlsPanel.setBorder(new EmptyBorder(10, 0, 10, 0));
+
+        JButton hangUpBtn = new JButton("Raccrocher");
+        hangUpBtn.setBackground(new Color(231, 76, 60)); // Red
+        hangUpBtn.setForeground(Color.WHITE);
+        hangUpBtn.setFocusPainted(false);
+        hangUpBtn.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        hangUpBtn.addActionListener(e -> leaveVoiceChannel());
+
+        controlsPanel.add(hangUpBtn);
+        voicePanel.add(controlsPanel, BorderLayout.SOUTH);
+
         // Mic Level Bar (Bottom of Voice Panel)
 
         centerPanel.add(chatPanel, "CHAT");
@@ -326,7 +451,7 @@ public class ChatController extends JFrame {
         JScrollPane userScroll = new JScrollPane(userList);
         userScroll.setBorder(null);
         userScroll.setBackground(BG_SIDEBAR);
-        userScroll.getVerticalScrollBar().setUI(new SleekScrollBarUI());
+        userScroll.getVerticalScrollBar().setUI(new ModernComponents.SleekScrollBarUI());
         userScroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
 
         rightPanel.add(userHeader, BorderLayout.NORTH);
@@ -385,27 +510,40 @@ public class ChatController extends JFrame {
         }
 
         // Changement de canal
+        // Changement de canal
         channelList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                ChannelItem selected = channelList.getSelectedValue();
-                if (selected != null && !selected.name.equals(currentChannel)) {
-                    if (selected.type.equals("VOICE")) {
-                        currentChannel = selected.name;
-                        networkClient.sendCommand("/join " + selected.name);
+                SidebarItem selectedItem = channelList.getSelectedValue();
+                if (selectedItem != null && selectedItem.isChannel()) {
+                    ChannelItem selected = (ChannelItem) selectedItem;
+                    if (!selected.name.equals(currentChannel)) {
+                        if (selected.type.equals("VOICE")) {
+                            // Do NOT change currentChannel for chat view
+                            // currentChannel = selected.name;
 
-                        // Connect Voice Manager
-                        if (voiceManager != null) {
-                            voiceManager.joinChannel(selected.name);
+                            // Send Presence (/join) so server updates user list
+                            networkClient.sendCommand("/join " + selected.name);
+
+                            // Connect Voice Manager
+                            if (voiceManager != null) {
+                                voiceManager.joinChannel(selected.name, currentUser);
+                                voiceManager.setTalkingListener((user, talking) -> {
+                                    SwingUtilities.invokeLater(() -> updateTalkingStatus(user, talking));
+                                });
+                            }
+
+                            // Show Sidebar Control
+                            voiceControlPanel.setVisible(true);
+                            voiceStatusLabel.setText(selected.name);
+
+                            // Keep Chat View
+                            centerLayout.show(centerPanel, "CHAT");
+
+                            voiceUsersModel.clear();
+                        } else {
+                            centerLayout.show(centerPanel, "CHAT");
+                            switchChannel(selected.name);
                         }
-
-                        // Switch UI
-                        channelLabel.setText(" 🔊 " + currentChannel);
-                        centerLayout.show(centerPanel, "VOICE");
-                        voiceUsersModel.clear();
-                        addSystemMessage("🔊 Connexion au salon vocal " + selected.name + "...");
-                    } else {
-                        centerLayout.show(centerPanel, "CHAT");
-                        switchChannel(selected.name);
                     }
                 }
             }
@@ -417,8 +555,9 @@ public class ChatController extends JFrame {
         JMenuItem deleteChanItem = new JMenuItem("Supprimer");
 
         renameItem.addActionListener(e -> {
-            ChannelItem selected = channelList.getSelectedValue();
-            if (selected != null) {
+            SidebarItem selectedItem = channelList.getSelectedValue();
+            if (selectedItem != null && selectedItem.isChannel()) {
+                ChannelItem selected = (ChannelItem) selectedItem;
                 String newName = JOptionPane.showInputDialog(this, "Nouveau nom pour #" + selected.name + ":");
                 if (newName != null && !newName.trim().isEmpty()) {
                     networkClient.sendCommand("/renamechannel " + selected.name + " " + newName.trim());
@@ -427,8 +566,9 @@ public class ChatController extends JFrame {
         });
 
         deleteChanItem.addActionListener(e -> {
-            ChannelItem selected = channelList.getSelectedValue();
-            if (selected != null) {
+            SidebarItem selectedItem = channelList.getSelectedValue();
+            if (selectedItem != null && selectedItem.isChannel()) {
+                ChannelItem selected = (ChannelItem) selectedItem;
                 int confirm = JOptionPane.showConfirmDialog(this, "Supprimer #" + selected.name + " ?",
                         "Confirmer suppression", JOptionPane.YES_NO_OPTION);
                 if (confirm == JOptionPane.YES_OPTION) {
@@ -549,9 +689,9 @@ public class ChatController extends JFrame {
         btnPanel.setBackground(BG_DARK);
         btnPanel.setMaximumSize(new Dimension(500, 40));
 
-        JButton loginBtn = new ModernButton("Connexion");
-        JButton registerBtn = new ModernButton("S'inscrire");
-        registerBtn.setBackground(new Color(60, 63, 68)); // Darker for optional action
+        JButton loginBtn = new ModernComponents.ModernButton("Connexion");
+        JButton registerBtn = new ModernComponents.ModernButton("S'inscrire", new Color(60, 63, 68),
+                new Color(90, 93, 98));
 
         // Close button
         JButton closeBtn = new JButton("X");
@@ -654,7 +794,7 @@ public class ChatController extends JFrame {
                 SimpleAttributeSet userStyle = new SimpleAttributeSet();
                 StyleConstants.setForeground(userStyle,
                         msg.getUsername().equals(currentUser) ? ACCENT : new Color(46, 204, 113));
-                StyleConstants.setFontFamily(userStyle, "Segoe UI");
+                StyleConstants.setFontFamily(userStyle, "Segoe UI Emoji");
                 StyleConstants.setBold(userStyle, true);
                 StyleConstants.setFontSize(userStyle, 14);
 
@@ -667,6 +807,7 @@ public class ChatController extends JFrame {
                 SimpleAttributeSet textStyle = new SimpleAttributeSet();
                 StyleConstants.setForeground(textStyle,
                         msg.getType() == Message.MessageType.SYSTEM ? TEXT_GRAY : TEXT_NORMAL);
+                StyleConstants.setFontFamily(textStyle, "Segoe UI Emoji");
                 StyleConstants.setFontSize(textStyle, 14);
 
                 // Insertion
@@ -757,7 +898,7 @@ public class ChatController extends JFrame {
                         container.add(infoPanel);
                         container.add(Box.createVerticalStrut(5));
 
-                        JButton downloadBtn = new ModernButton("⬇ Télécharger le fichier");
+                        JButton downloadBtn = new ModernComponents.ModernButton("⬇ Télécharger le fichier");
                         downloadBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
                         downloadBtn.setBorder(new EmptyBorder(5, 10, 5, 10));
                         downloadBtn.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -808,25 +949,42 @@ public class ChatController extends JFrame {
     private void switchChannel(String newChannel) {
         // Détection du type de salon
         String type = "TEXT";
+
         for (int i = 0; i < channelModel.getSize(); i++) {
-            ChannelItem item = channelModel.get(i);
-            if (item.name.equals(newChannel)) {
-                type = item.type;
+            SidebarItem item = channelModel.get(i);
+            if (item.isChannel() && item.getName().equals(newChannel)) {
+                type = ((ChannelItem) item).type;
                 break;
             }
         }
 
         if (type.equals("VOICE")) {
-            voiceManager.joinChannel(newChannel);
+            voiceManager.joinChannel(newChannel, currentUser);
+            voiceManager.setTalkingListener((user, talking) -> {
+                SwingUtilities.invokeLater(() -> updateTalkingStatus(user, talking));
+            });
+            // Switch to Voice View
+            if (centerLayout != null && centerPanel != null) {
+                System.out.println("DEBUG: Switching to VOICE view");
+                centerLayout.show(centerPanel, "VOICE");
+                centerPanel.revalidate();
+                centerPanel.repaint();
+            } else {
+                System.out.println("DEBUG: centerLayout or centerPanel is null!");
+            }
         } else {
             voiceManager.leaveChannel();
+            // Switch to Chat View
+            if (centerLayout != null && centerPanel != null) {
+                centerLayout.show(centerPanel, "CHAT");
+            }
         }
 
         currentChannel = newChannel;
 
         // Update Header
         if (channelLabel != null) {
-            channelLabel.setText((type.equals("VOICE") ? " 🔊 " : " # ") + currentChannel);
+            channelLabel.setText(" # " + currentChannel);
         }
 
         networkClient.sendCommand("/join " + newChannel);
@@ -864,28 +1022,79 @@ public class ChatController extends JFrame {
     }
 
     // Renderer personnalisé pour les salons avec HOVER et TYPE
-    private class ChannelRenderer extends DefaultListCellRenderer {
+    // Renderer personnalisé pour les salons (Channel) ET les utilisateurs
+    // (VoiceUser)
+    private class SidebarRenderer extends DefaultListCellRenderer {
         @Override
         public Component getListCellRendererComponent(JList<?> list, Object value,
                 int index, boolean isSelected, boolean cellHasFocus) {
-            ChannelItem item = (ChannelItem) value;
-            String prefix = item.type.equals("VOICE") ? "🎙 " : "# ";
-            JLabel label = (JLabel) super.getListCellRendererComponent(
-                    list, prefix + item.name, index, isSelected, cellHasFocus);
 
-            label.setBorder(new EmptyBorder(0, 15, 0, 10)); // Padding ajusté
+            SidebarItem item = (SidebarItem) value;
 
-            if (isSelected) {
-                label.setBackground(new Color(66, 70, 77));
-                label.setForeground(Color.WHITE);
-            } else if (index == hoveredChannelIndex) {
-                label.setBackground(HOVER_BG);
-                label.setForeground(TEXT_NORMAL);
+            if (item.isChannel()) {
+                ChannelItem cItem = (ChannelItem) item;
+                String prefix = cItem.type.equals("VOICE") ? "🔊 " : "# ";
+                JLabel label = (JLabel) super.getListCellRendererComponent(
+                        list, prefix + cItem.name, index, isSelected, cellHasFocus);
+
+                label.setBorder(new EmptyBorder(0, 10, 0, 10));
+
+                if (isSelected) {
+                    label.setBackground(new Color(66, 70, 77));
+                    label.setForeground(Color.WHITE);
+                } else if (index == hoveredChannelIndex) {
+                    label.setBackground(HOVER_BG);
+                    label.setForeground(TEXT_NORMAL);
+                } else {
+                    label.setBackground(BG_SIDEBAR);
+                    label.setForeground(TEXT_GRAY);
+                }
+                return label;
             } else {
-                label.setBackground(BG_SIDEBAR);
-                label.setForeground(TEXT_GRAY);
+                // Voice User
+                VoiceUserItem vItem = (VoiceUserItem) item; // CAST
+
+                JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+                panel.setBackground(BG_SIDEBAR);
+
+                // Border logic: default indent (2, 30, 2, 0)
+                // If talking, we can add a green border? Or just change text color?
+                // User asked for "framed in green".
+
+                // Use generated avatar
+                JLabel icon = new JLabel(ModernComponents.generateAvatar(item.getName(), 24));
+                // JLabel icon = new JLabel("👤"); // Avatar placeholder
+                // icon.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 12));
+                // icon.setForeground(vItem.isTalking ? Color.GREEN : TEXT_GRAY); // Make icon
+                // green if talking - Handled by border now
+
+                JLabel name = new JLabel(item.getName());
+                name.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+                name.setForeground(TEXT_GRAY);
+
+                if (item.getName().equals(currentUser)) {
+                    name.setForeground(ACCENT);
+                    name.setFont(new Font("Segoe UI", Font.BOLD, 13));
+                }
+
+                // Green Border if talking
+                if (vItem.isTalking) {
+                    // name.setBorder(BorderFactory.createLineBorder(Color.GREEN, 1));
+                    // Or better, make the whole panel have a green left border indicator?
+                    // "pseudo encadré en vert" -> literally border around name.
+                    name.setBorder(BorderFactory.createCompoundBorder(
+                            BorderFactory.createLineBorder(Color.GREEN, 1),
+                            new EmptyBorder(0, 4, 0, 4)));
+                } else {
+                    name.setBorder(new EmptyBorder(1, 5, 1, 5)); // Placeholder to keep size steady
+                }
+
+                panel.setBorder(new EmptyBorder(2, 30, 2, 0)); // Indent
+
+                panel.add(icon);
+                panel.add(name);
+                return panel;
             }
-            return label;
         }
     }
 
@@ -909,13 +1118,89 @@ public class ChatController extends JFrame {
         });
     }
 
-    public void updateVoiceUsers(String[] users) {
+    public void updateVoiceUsers(String channelName, String[] users) {
         SwingUtilities.invokeLater(() -> {
-            voiceUsersModel.clear();
-            for (String user : users) {
-                voiceUsersModel.addElement(user);
+            // Update Sidebar for this channel
+            updateSidebarVoiceUsers(channelName, users);
+
+            // Update user list in the Voice Panel only if it matches our current voice
+            // session
+            String currentVoice = voiceStatusLabel.getText();
+            if (currentVoice != null && currentVoice.equals(channelName)) {
+                voiceUsersModel.clear();
+                for (String user : users) {
+                    voiceUsersModel.addElement(user);
+                }
             }
         });
+    }
+
+    private void updateTalkingStatus(String user, boolean talking) {
+        talkingStates.put(user, talking);
+        if (voiceUsersList != null) {
+            voiceUsersList.repaint();
+        }
+
+        for (int i = 0; i < channelModel.getSize(); i++) {
+            SidebarItem item = channelModel.get(i);
+            if (!item.isChannel() && item.getName().equals(user)) {
+                VoiceUserItem vItem = (VoiceUserItem) item;
+                vItem.setTalking(talking);
+                channelList.repaint(channelList.getCellBounds(i, i));
+                break;
+            }
+        }
+    }
+
+    private void leaveVoiceChannel() {
+        // Clear users from sidebar for the current voice channel
+        String currentVoice = voiceStatusLabel.getText();
+        if (currentVoice != null && !currentVoice.isEmpty()) {
+            updateSidebarVoiceUsers(currentVoice, new String[0]);
+        }
+
+        // Leave voice logic
+        voiceManager.leaveChannel();
+        voiceControlPanel.setVisible(false);
+
+        // Restore presence to current text channel
+        networkClient.sendCommand("/join " + currentChannel);
+    }
+
+    private void updateSidebarVoiceUsers(String channelName, String[] users) {
+        // Find channel index
+        int channelIndex = -1;
+        boolean isVoice = false;
+
+        for (int i = 0; i < channelModel.getSize(); i++) {
+            SidebarItem item = channelModel.get(i);
+            if (item.isChannel() && item.getName().equals(channelName)) {
+                channelIndex = i;
+                if (item instanceof ChannelItem) {
+                    isVoice = "VOICE".equals(((ChannelItem) item).type);
+                }
+                break;
+            }
+        }
+
+        if (channelIndex != -1) {
+            // Remove existing users under this channel
+            int nextIndex = channelIndex + 1;
+            while (nextIndex < channelModel.getSize()) {
+                if (channelModel.get(nextIndex).isChannel()) {
+                    break;
+                }
+                channelModel.remove(nextIndex);
+            }
+
+            // Insert new users ONLY if it is a voice channel
+            if (isVoice) {
+                for (String user : users) {
+                    channelModel.add(channelIndex + 1, new VoiceUserItem(user));
+                    channelIndex++; // Increment specific insertion point
+                }
+            }
+        }
     }
 
     private void showCreateChannelDialog() {
@@ -986,7 +1271,7 @@ public class ChatController extends JFrame {
         cancelBtn.setBorderPainted(false);
         cancelBtn.addActionListener(e -> dialog.dispose());
 
-        JButton createBtn = new ModernButton("Créer");
+        JButton createBtn = new ModernComponents.ModernButton("Créer");
         createBtn.setPreferredSize(new Dimension(100, 35));
         createBtn.addActionListener(e -> {
             String name = nameField.getText().trim().replace(" ", "-").toLowerCase();
@@ -1066,13 +1351,13 @@ public class ChatController extends JFrame {
     }
 
     private void showEmojiPicker(Component invoker) {
-        JWindow emojiWindow = new JWindow(SwingUtilities.getWindowAncestor(invoker));
+        JPopupMenu emojiMenu = new JPopupMenu();
+        emojiMenu.setBackground(new Color(47, 49, 54));
+        emojiMenu.setBorder(BorderFactory.createLineBorder(new Color(32, 34, 37), 1));
 
         JPanel content = new JPanel(new GridLayout(5, 6, 2, 2));
-        content.setBackground(new Color(47, 49, 54)); // BG_SIDEBAR for better visibility
-        content.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(32, 34, 37), 1),
-                new EmptyBorder(5, 5, 5, 5)));
+        content.setBackground(new Color(47, 49, 54));
+        content.setBorder(new EmptyBorder(5, 5, 5, 5));
 
         String[] emojis = {
                 "😀", "😃", "😄", "😁", "😆", "😅",
@@ -1083,15 +1368,12 @@ public class ChatController extends JFrame {
         };
 
         for (String emoji : emojis) {
-            // Utilisation d'images en ligne pour les emojis "jolis" (Twemoji)
-            // Fallback sur texte si echec de chargement
             String hex = Integer.toHexString(emoji.codePointAt(0));
             String url = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/" + hex + ".png";
 
-            JButton btn = new JButton(emoji); // Texte par défaut
+            JButton btn = new JButton(emoji);
             btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 24));
 
-            // Tentative de chargement asynchrone pour ne pas bloquer l'UI
             new Thread(() -> {
                 try {
                     URL u = URI.create(url).toURL();
@@ -1102,18 +1384,16 @@ public class ChatController extends JFrame {
                         btn.setIcon(icon);
                     });
                 } catch (Exception ex) {
-                    // keep text
                 }
             }).start();
 
             btn.setForeground(Color.WHITE);
             btn.setBackground(new Color(47, 49, 54));
-
-            // Explicitly set opaque for some LAFs
             btn.setOpaque(true);
             btn.setBorderPainted(false);
             btn.setFocusPainted(false);
             btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            btn.setPreferredSize(new Dimension(40, 40));
 
             btn.addMouseListener(new MouseAdapter() {
                 public void mouseEntered(MouseEvent e) {
@@ -1125,30 +1405,20 @@ public class ChatController extends JFrame {
                 }
             });
 
+            final String emojiChar = emoji;
             btn.addActionListener(e -> {
-                inputField.setText(inputField.getText() + emoji);
-                emojiWindow.dispose();
+                SwingUtilities.invokeLater(() -> {
+                    inputField.setText(inputField.getText() + emojiChar);
+                    inputField.requestFocusInWindow();
+                    inputField.setCaretPosition(inputField.getText().length());
+                });
+                emojiMenu.setVisible(false);
             });
             content.add(btn);
         }
 
-        emojiWindow.add(content);
-        emojiWindow.pack();
-
-        Point loc = invoker.getLocationOnScreen();
-        // Position above the button
-        emojiWindow.setLocation(loc.x, loc.y - emojiWindow.getHeight() - 10);
-        emojiWindow.setVisible(true);
-
-        // Auto-close on focus lost
-        emojiWindow.setFocusable(true);
-        emojiWindow.addFocusListener(new FocusAdapter() {
-            @Override
-            public void focusLost(FocusEvent e) {
-                emojiWindow.dispose();
-            }
-        });
-        emojiWindow.requestFocus();
+        emojiMenu.add(content);
+        emojiMenu.show(invoker, 0, -250);
     }
 
     private boolean isImageFile(String name) {
@@ -1185,20 +1455,6 @@ public class ChatController extends JFrame {
         return btn;
     }
 
-    public static class ChannelItem {
-        String name;
-        String type;
-
-        public ChannelItem(String name, String type) {
-            this.name = name;
-            this.type = type;
-        }
-
-        public String toString() {
-            return name;
-        }
-    }
-
     // Renderer pour les utilisateurs avec indicateur vert et HOVER
     private class UserRenderer extends DefaultListCellRenderer {
         @Override
@@ -1214,7 +1470,7 @@ public class ChatController extends JFrame {
                 panel.setBackground(BG_SIDEBAR);
             }
 
-            // Indicateur vert
+            // Indicateur vert (Status)
             JPanel indicator = new JPanel();
             indicator.setPreferredSize(new Dimension(10, 10));
             indicator.setBackground(new Color(46, 204, 113)); // Vert online
@@ -1225,11 +1481,15 @@ public class ChatController extends JFrame {
             // JPanel carré est ok pour l'instant
             // ou on peut faire un JPanel custom)
 
+            // Avatar
+            JLabel icon = new JLabel(ModernComponents.generateAvatar(value.toString(), 32));
+
             JLabel name = new JLabel(value.toString());
             name.setForeground(isSelected ? Color.WHITE : (index == hoveredUserIndex ? TEXT_NORMAL : TEXT_GRAY));
             name.setFont(new Font("Segoe UI", Font.PLAIN, 14));
 
             panel.add(indicator);
+            panel.add(icon); // Add Avatar
             panel.add(name);
             return panel;
         }
@@ -1249,15 +1509,24 @@ public class ChatController extends JFrame {
                 panel.setBackground(BG_DARK);
             }
 
-            // Indicator (Left)
-            JPanel indicator = new JPanel();
-            indicator.setPreferredSize(new Dimension(10, 10));
-            indicator.setBackground(new Color(46, 204, 113));
+            // Indicator (Left) replaced by Avatar with border in this design?
+            // Let's keep indicator for "speaking" visualization on the avatar itself?
+            // For now, simple avatar
 
             JPanel leftPanel = new JPanel(new GridBagLayout());
             leftPanel.setOpaque(false);
-            leftPanel.add(indicator);
+
+            JLabel avatar = new JLabel(ModernComponents.generateAvatar(value.toString(), 40));
+            leftPanel.add(avatar);
+
             panel.add(leftPanel, BorderLayout.WEST);
+
+            // Green Border if talking
+            if (talkingStates.getOrDefault(value.toString(), false)) {
+                panel.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(new Color(46, 204, 113), 2),
+                        new EmptyBorder(6, 8, 6, 8))); // Adjusted inner padding
+            }
 
             // Text Panel (Center)
             JPanel textPanel = new JPanel();
@@ -1334,79 +1603,6 @@ public class ChatController extends JFrame {
         }
     }
 
-    private static class ModernButton extends JButton {
-        private Color targetBackground;
-        private float animationProgress = 0f;
-        private Timer hoverTimer;
-
-        public ModernButton(String text) {
-            super(text);
-            setContentAreaFilled(false);
-            setFocusPainted(false);
-            setBorderPainted(false);
-            setBackground(ACCENT);
-            setForeground(Color.WHITE);
-            setFont(new Font("Segoe UI", Font.BOLD, 14));
-            setCursor(new Cursor(Cursor.HAND_CURSOR));
-
-            targetBackground = ACCENT;
-
-            addMouseListener(new MouseAdapter() {
-                @Override
-                public void mouseEntered(MouseEvent e) {
-                    startAnimation(ACCENT_HOVER);
-                }
-
-                @Override
-                public void mouseExited(MouseEvent e) {
-                    startAnimation(ACCENT);
-                }
-            });
-        }
-
-        private void startAnimation(Color target) {
-            targetBackground = target;
-            if (hoverTimer != null && hoverTimer.isRunning())
-                hoverTimer.stop();
-
-            hoverTimer = new Timer(20, e -> {
-                Color current = getBackground();
-                int r = approach(current.getRed(), targetBackground.getRed());
-                int g = approach(current.getGreen(), targetBackground.getGreen());
-                int b = approach(current.getBlue(), targetBackground.getBlue());
-
-                setBackground(new Color(r, g, b));
-                repaint();
-
-                if (r == targetBackground.getRed() && g == targetBackground.getGreen()
-                        && b == targetBackground.getBlue()) {
-                    ((Timer) e.getSource()).stop();
-                }
-            });
-            hoverTimer.start();
-        }
-
-        private int approach(int current, int target) {
-            int step = 5;
-            if (current < target)
-                return Math.min(current + step, target);
-            if (current > target)
-                return Math.max(current - step, target);
-            return current;
-        }
-
-        @Override
-        protected void paintComponent(Graphics g) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(getBackground());
-            g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
-
-            super.paintComponent(g);
-            g2.dispose();
-        }
-    }
-
     private void saveFile(Message msg) {
         JFileChooser chooser = new JFileChooser();
         chooser.setSelectedFile(new java.io.File(msg.getFileName()));
@@ -1417,47 +1613,6 @@ public class ChatController extends JFrame {
             } catch (java.io.IOException e) {
                 JOptionPane.showMessageDialog(this, "Erreur sauvegarde: " + e.getMessage());
             }
-        }
-    }
-
-    private static class SleekScrollBarUI extends javax.swing.plaf.basic.BasicScrollBarUI {
-        @Override
-        protected void configureScrollBarColors() {
-            thumbColor = new Color(32, 34, 37);
-            trackColor = BG_SIDEBAR; // Fond transparent/similaire
-        }
-
-        @Override
-        protected JButton createDecreaseButton(int orientation) {
-            return createZeroButton();
-        }
-
-        @Override
-        protected JButton createIncreaseButton(int orientation) {
-            return createZeroButton();
-        }
-
-        private JButton createZeroButton() {
-            JButton btn = new JButton();
-            btn.setPreferredSize(new Dimension(0, 0));
-            btn.setMinimumSize(new Dimension(0, 0));
-            btn.setMaximumSize(new Dimension(0, 0));
-            return btn;
-        }
-
-        @Override
-        protected void paintThumb(Graphics g, JComponent c, Rectangle thumbBounds) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(thumbColor);
-            // Forme arrondie et plus fine à l'intérieur
-            g2.fillRoundRect(thumbBounds.x, thumbBounds.y, thumbBounds.width, thumbBounds.height, 10, 10);
-            g2.dispose();
-        }
-
-        @Override
-        protected void paintTrack(Graphics g, JComponent c, Rectangle trackBounds) {
-            // Track invisible ou discret
         }
     }
 
@@ -1584,7 +1739,7 @@ public class ChatController extends JFrame {
         formPanel.add(chkDel);
         formPanel.add(chkManage);
 
-        JButton saveBtn = new ModernButton("Créer / Mettre à jour");
+        JButton saveBtn = new ModernComponents.ModernButton("Créer / Mettre à jour");
         saveBtn.addActionListener(e -> {
             String rName = nameField.getText().trim();
             if (rName.isEmpty())
@@ -1630,7 +1785,7 @@ public class ChatController extends JFrame {
         roleList.setBackground(BG_SIDEBAR);
         roleList.setForeground(TEXT_NORMAL);
 
-        JButton deleteBtn = new ModernButton("Supprimer le rôle");
+        JButton deleteBtn = new ModernComponents.ModernButton("Supprimer le rôle");
         deleteBtn.setBackground(new Color(237, 66, 69));
         deleteBtn.addActionListener(e -> {
             String selected = roleList.getSelectedValue();

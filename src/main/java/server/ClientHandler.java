@@ -169,6 +169,7 @@ public class ClientHandler implements Runnable {
                     DatabaseManager.createRole(rName, pCreate, pBlock, pDel, pManage);
                     sendMessage(
                             new Message("System", "Rôle " + rName + " créé.", "system", Message.MessageType.SYSTEM));
+                    sendRolesList(); // Update client
                 } else {
                     sendMessage(
                             new Message("System", "Usage: /createrole <name> <pCreate> <pBlock> <pDel> <pManageRole>",
@@ -270,15 +271,10 @@ public class ClientHandler implements Runnable {
                     sendMessage(new Message("System", "Impossible de supprimer le rôle Admin.", "system",
                             Message.MessageType.SYSTEM));
                 } else {
-                    // We need a deleteRole method in DB manager, let's assume raw SQL or add it.
-                    // For now, let's rely on DatabaseManager being updated or just fail gracefully
-                    // if not exists.
-                    // Actually let's assume we can add it or it exists? It doesn't exist yet
-                    // properly.
-                    // We will add deleteRole to DatabaseManager in next step.
                     DatabaseManager.deleteRole(rName);
                     sendMessage(new Message("System", "Rôle " + rName + " supprimé.", "system",
                             Message.MessageType.SYSTEM));
+                    sendRolesList(); // Update client
                 }
             }
         } else {
@@ -294,6 +290,12 @@ public class ClientHandler implements Runnable {
                 }
             }
         }
+    }
+
+    private void sendRolesList() {
+        List<String> roles = DatabaseManager.getAllRoles();
+        String rolesStr = String.join(",", roles);
+        sendMessage(new Message("System", rolesStr, "ROLES_LIST", Message.MessageType.SYSTEM));
     }
 
     private void joinChannel(String channelName) {

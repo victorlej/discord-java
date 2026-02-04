@@ -26,7 +26,10 @@ public class VoiceManager {
         System.out.println("[VoiceManager] Init with host: " + serverHost);
     }
 
-    public void joinChannel(String channelName) {
+    private String username;
+
+    public void joinChannel(String channelName, String username) {
+        this.username = username;
         if (active) {
             leaveChannel();
         }
@@ -122,25 +125,45 @@ public class VoiceManager {
                         }
 
                         levelListener.accept(normalized);
+
+                        // Detect Talking Status Transition
+                        boolean nowTalking = normalized > 10.0;
+                        if (nowTalking != isTalking) {
+                            isTalking = nowTalking;
+                            // Notify local listener immediately for UI update
+                            if (talkingListener != null) {
+                                talkingListener.accept(username, isTalking);
+                            }
+                            try {
+                                // Send TALK status packet: 'T' + 1 or 0
+                                byte[] status = new byte[1];
+                                status[0] = (byte) (isTalking ? '1' : '0');
+                                sendPacket('T', status);
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        }
                     }
 
-                    // Packet: 'A' + AudioData
-                    byte[] packetData = new byte[bytesRead + 1];
-                    packetData[0] = (byte) 'A'; // 'A' for Audio
-                    System.arraycopy(audioData, 0, packetData, 1, bytesRead);
-
-                    DatagramPacket packet = new DatagramPacket(
-                            packetData,
-                            packetData.length,
-                            InetAddress.getByName(serverHost),
-                            SERVER_PORT);
-                    socket.send(packet);
+                    // Packet: 'A' + AudioData (via sendPacket)
+                    byte[] validAudio = new byte[bytesRead];
+                    System.arraycopy(audioData, 0, validAudio, 0, bytesRead);
+                    sendPacket('A', validAudio);
                 }
             } catch (IOException e) {
                 if (active)
                     e.printStackTrace();
             }
         }
+    }
+
+    // Track talking state to avoid spamming packets
+    private boolean isTalking = false;
+
+    private java.util.function.BiConsumer<String, Boolean> talkingListener;
+
+    public void setTalkingListener(java.util.function.BiConsumer<String, Boolean> listener) {
+        this.talkingListener = listener;
     }
 
     private void playAudio() {
@@ -153,11 +176,32 @@ public class VoiceManager {
                 socket.receive(packet); // Blocking
 
                 byte[] data = packet.getData();
-                // System.out.println("[VoiceManager] Received packet len=" +
-                // packet.getLength()); // Debug spam
+                int len = packet.getLength();
 
-                if (packet.getLength() > 1 && data[0] == 'A') {
-                    speakers.write(data, 1, packet.getLength() - 1);
+                if (len < 2)
+                    continue; // Too short
+
+                char type = (char) data[0];
+                int nameLen = data[1] & 0xFF; // Unsigned byte
+
+                if (len < 2 + nameLen)
+                    continue; // Invalid
+
+                String senderName = new String(data, 2, nameLen);
+                int payloadStart = 2 + nameLen;
+                int payloadLen = len - payloadStart;
+
+                if (type == 'A') {
+                    if (payloadLen > 0)
+                        speakers.write(data, payloadStart, payloadLen);
+                } else if (type == 'T') {
+                    // Parse '1' or '0'
+                    if (payloadLen > 0) {
+                        boolean isTalking = (data[payloadStart] == '1');
+                        if (talkingListener != null) {
+                            talkingListener.accept(senderName, isTalking);
+                        }
+                    }
                 }
             } catch (IOException e) {
                 if (active)
@@ -167,9 +211,14 @@ public class VoiceManager {
     }
 
     private void sendPacket(char type, byte[] content) throws IOException {
-        byte[] data = new byte[content.length + 1];
+        byte[] nameBytes = username.getBytes();
+        int nameLen = nameBytes.length;
+
+        byte[] data = new byte[1 + 1 + nameLen + content.length];
         data[0] = (byte) type;
-        System.arraycopy(content, 0, data, 1, content.length);
+        data[1] = (byte) nameLen;
+        System.arraycopy(nameBytes, 0, data, 2, nameLen);
+        System.arraycopy(content, 0, data, 2 + nameLen, content.length);
 
         DatagramPacket packet = new DatagramPacket(
                 data,
