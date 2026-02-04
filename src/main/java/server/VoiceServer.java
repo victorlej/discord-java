@@ -45,14 +45,21 @@ public class VoiceServer implements Runnable {
                 char type = (char) data[0]; // First byte is type
 
                 if (type == 'J') { // JOIN
-                    String channelName = new String(data, 1, len - 1).trim();
-                    System.out.println("[VoiceServer] Client " + sender + " joining " + channelName);
-                    handleJoin(sender, channelName);
+                    // Packet format: [Type] [UserLen] [User...] [ChannelName...]
+                    // We need to parse UserLen to skip User and get ChannelName
+                    int userLen = data[1] & 0xFF;
+                    int headerLen = 2 + userLen; // 1 (Type) + 1 (Len) + UserLen
+
+                    if (len > headerLen) {
+                        String channelName = new String(data, headerLen, len - headerLen).trim();
+                        System.out.println("[VoiceServer] Client " + sender + " joining " + channelName);
+                        handleJoin(sender, channelName);
+                    }
                 } else if (type == 'L') { // LEAVE
                     System.out.println("[VoiceServer] Client " + sender + " leaving");
                     handleLeave(sender);
                 } else if (type == 'A') { // AUDIO
-                    // System.out.println("[VoiceServer] Audio from " + sender); // Spammy
+                    // System.out.println("[VoiceServer] Audio from " + sender);
                     handleAudio(sender, packet);
                 } else if (type == 'T') { // TALK STATUS
                     handleForward(sender, packet);
