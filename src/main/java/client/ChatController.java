@@ -39,6 +39,10 @@ public class ChatController extends JFrame {
     private VoiceManager voiceManager; // Voice Manager
     private String currentUser;
     private String currentChannel = "general";
+    private String currentServer = "Main Server";
+    private java.util.Map<String, java.util.List<ChannelItem>> serverChannels = new java.util.HashMap<>();
+    private JPanel serverListPanel;
+    private java.util.Map<String, ModernComponents.ServerButton> serverButtons = new java.util.HashMap<>();
 
     // Sidebar Model
     private DefaultListModel<SidebarItem> channelModel;
@@ -49,6 +53,8 @@ public class ChatController extends JFrame {
     private DefaultListModel<String> userModel;
     private StyledDocument chatDoc;
     private NetworkClient networkClient;
+    private JLabel serverHeader;
+    private JLabel channelLabel;
 
     public interface SidebarItem {
         boolean isChannel();
@@ -360,7 +366,7 @@ public class ChatController extends JFrame {
         leftPanel.setPreferredSize(new Dimension(240, 0));
         leftPanel.setBorder(new EmptyBorder(20, 0, 0, 0));
 
-        JLabel serverHeader = new JLabel("  SERVEUR JAVA");
+        serverHeader = new JLabel("  SERVEUR JAVA");
         serverHeader.setForeground(TEXT_GRAY);
         serverHeader.setFont(new Font("Segoe UI", Font.BOLD, 12));
 
@@ -597,9 +603,40 @@ public class ChatController extends JFrame {
         rightPanel.add(userScroll, BorderLayout.CENTER);
 
         // Add proper panel
-        add(leftPanel, BorderLayout.WEST);
-        add(centerPanel, BorderLayout.CENTER);
-        add(rightPanel, BorderLayout.EAST);
+        // Layout Global:
+        // WEST: Server List
+        // CENTER: Main Split (Channel List | Chat | Users)
+
+        // Main Container for Content (Channel + Chat + Users)
+        JPanel contentContainer = new JPanel(new BorderLayout());
+        contentContainer.add(leftPanel, BorderLayout.WEST);
+        contentContainer.add(centerPanel, BorderLayout.CENTER);
+        contentContainer.add(rightPanel, BorderLayout.EAST);
+
+        // Server List Panel (Far Left)
+        serverListPanel = new JPanel();
+        serverListPanel.setLayout(new BoxLayout(serverListPanel, BoxLayout.Y_AXIS));
+        serverListPanel.setBackground(new Color(32, 34, 37)); // Darker than dark
+        // Remove fixed preferred size to allow dynamic height calculation
+        // serverListPanel.setPreferredSize(new Dimension(72, 0));
+        serverListPanel.setBorder(new EmptyBorder(10, 10, 10, 10)); // Padding for icons
+
+        // Scroll for server list (in case of many servers)
+        JScrollPane serverScroll = new JScrollPane(serverListPanel);
+        serverScroll.setBorder(null);
+        serverScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        serverScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+        serverScroll.getVerticalScrollBar().setUI(new ModernComponents.SleekScrollBarUI());
+        serverScroll.getVerticalScrollBar().setPreferredSize(new Dimension(0, 0)); // Hidden scrollbar visual but
+                                                                                   // functional
+
+        // Fix width of the scroll pane region
+        JPanel serverContainer = new JPanel(new BorderLayout());
+        serverContainer.add(serverScroll, BorderLayout.CENTER);
+        serverContainer.setPreferredSize(new Dimension(72, 0)); // Fixed width for sidebar
+
+        add(serverContainer, BorderLayout.WEST);
+        add(contentContainer, BorderLayout.CENTER);
     } // End of layoutComponents
 
     private void setupListeners() {
@@ -1083,8 +1120,6 @@ public class ChatController extends JFrame {
         }
     }
 
-    private JLabel channelLabel;
-
     private void switchChannel(String newChannel) {
         // Détection du type de salon
         String type = "TEXT";
@@ -1237,23 +1272,157 @@ public class ChatController extends JFrame {
         }
     }
 
+    public void updateServerList(String[] servers) {
+        SwingUtilities.invokeLater(() -> {
+            serverListPanel.removeAll();
+            serverButtons.clear();
+
+            for (String server : servers) {
+                ModernComponents.ServerButton btn = new ModernComponents.ServerButton(server);
+                btn.addActionListener(e -> switchServer(server));
+
+                // Right click to delete
+                btn.addMouseListener(new MouseAdapter() {
+                    @Override
+                    public void mousePressed(MouseEvent e) {
+                        checkPopup(e);
+                    }
+
+                    @Override
+                    public void mouseReleased(MouseEvent e) {
+                        checkPopup(e);
+                    }
+
+                    private void checkPopup(MouseEvent e) {
+                        if ((e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e))
+                                && !"Main Server".equals(server)) {
+                            JPopupMenu menu = new JPopupMenu();
+                            JMenuItem deleteItem = new JMenuItem("Supprimer le serveur");
+                            deleteItem.addActionListener(ev -> {
+                                int confirm = JOptionPane.showConfirmDialog(ChatController.this,
+                                        "Supprimer le serveur " + server + " ?",
+                                        "Confirmation", JOptionPane.YES_NO_OPTION);
+                                if (confirm == JOptionPane.YES_OPTION) {
+                                    networkClient.sendCommand("/deleteserver " + server);
+                                }
+                            });
+                            menu.add(deleteItem);
+                            menu.show(btn, e.getX(), e.getY());
+                        }
+                    }
+                });
+
+                serverListPanel.add(btn);
+                serverListPanel.add(Box.createVerticalStrut(10));
+                serverButtons.put(server, btn);
+            }
+
+            // Separator
+            JSeparator sep = new JSeparator(SwingConstants.HORIZONTAL);
+            sep.setMaximumSize(new Dimension(50, 2));
+            sep.setForeground(new Color(60, 63, 68));
+            serverListPanel.add(sep);
+            serverListPanel.add(Box.createVerticalStrut(10));
+
+            // Add Server Button
+            JButton addServerBtn = new ModernComponents.ServerButton("+");
+            addServerBtn.setBackground(new Color(46, 204, 113));
+            addServerBtn.setForeground(Color.WHITE);
+            addServerBtn.setToolTipText("Créer un serveur");
+            addServerBtn.addActionListener(e -> {
+                String name = JOptionPane.showInputDialog(this, "Nom du nouveau serveur :");
+                if (name != null && !name.trim().isEmpty()) {
+                    networkClient.sendMessage(
+                            new Message(currentUser, name.trim(), "system", Message.MessageType.CREATE_SERVER));
+                }
+            });
+            serverListPanel.add(addServerBtn);
+
+            serverListPanel.revalidate();
+            serverListPanel.repaint();
+
+            // Select current server if exists, else fallback
+            if (!serverButtons.containsKey(currentServer)) {
+                if (serverButtons.containsKey("Main Server")) {
+                    currentServer = "Main Server";
+                } else if (!serverButtons.isEmpty()) {
+                    currentServer = serverButtons.keySet().iterator().next();
+                }
+            }
+            switchServer(currentServer);
+        });
+    }
+
+    private void switchServer(String serverName) {
+        // Validation with fallback
+        if (!serverButtons.containsKey(serverName)) {
+            if (serverButtons.containsKey("Main Server")) {
+                serverName = "Main Server";
+            } else if (!serverButtons.isEmpty()) {
+                serverName = serverButtons.keySet().iterator().next();
+            }
+        }
+
+        this.currentServer = serverName;
+        if (serverHeader != null) {
+            serverHeader.setText("  " + serverName.toUpperCase());
+        }
+
+        // Update Buttons Visuals
+        for (Map.Entry<String, ModernComponents.ServerButton> entry : serverButtons.entrySet()) {
+            entry.getValue().setSelected(entry.getKey().equals(serverName));
+        }
+
+        // Update Channels
+        channelModel.clear();
+        java.util.List<ChannelItem> channels = serverChannels.get(serverName);
+        if (channels != null) {
+            // Sort? Text first then Voice?
+            for (ChannelItem item : channels) {
+                channelModel.addElement(item);
+            }
+        }
+
+        // If current channel is NOT in the new server, switch to a default channel of
+        // that server
+        boolean currentInServer = false;
+        if (channels != null) {
+            for (ChannelItem item : channels) {
+                if (item.name.equals(currentChannel)) {
+                    currentInServer = true;
+                    break;
+                }
+            }
+        }
+
+        if (!currentInServer && !channelModel.isEmpty()) {
+            // Switch to first channel
+            SidebarItem first = channelModel.get(0);
+            if (first.isChannel()) {
+                switchChannel(((ChannelItem) first).name);
+            }
+        }
+    }
+
     public void updateChannelList(String[] channelsData) {
         SwingUtilities.invokeLater(() -> {
-            channelModel.clear();
-            boolean currentFound = false;
+            serverChannels.clear();
+
             for (String s : channelsData) {
+                // Format: name:type:serverName
                 String[] parts = s.split(":");
-                String name = parts[0];
-                String type = parts.length > 1 ? parts[1] : "TEXT";
-                channelModel.addElement(new ChannelItem(name, type));
-                if (name.equals(currentChannel))
-                    currentFound = true;
+                if (parts.length >= 2) {
+                    String name = parts[0];
+                    String type = parts[1];
+                    String server = parts.length > 2 ? parts[2] : "Main Server";
+
+                    serverChannels.computeIfAbsent(server, k -> new java.util.ArrayList<>())
+                            .add(new ChannelItem(name, type));
+                }
             }
-            // If current channel invalid (deleted), switch to general or first
-            if (!currentFound && !channelModel.isEmpty()) {
-                // Logic to switch back if current channel lost?
-                // For now, keep it simple
-            }
+
+            // Refresh current view
+            switchServer(currentServer);
         });
     }
 
@@ -1416,7 +1585,13 @@ public class ChatController extends JFrame {
             String name = nameField.getText().trim().replace(" ", "-").toLowerCase();
             if (!name.isEmpty()) {
                 String type = voiceRadio.isSelected() ? "VOICE" : "TEXT";
-                networkClient.sendCommand("/create " + name + " " + type);
+                // Handle spaces in server name? Server name is last argument.
+                // ClientHandler needs to be updated to join remaining parts or use a delimiter.
+                // Let's use a safe delimiter if possible, or assume simple parsing for now.
+                // Or better, send as Message object with custom fields? No, command is string
+                // based.
+                // Let's just append it.
+                networkClient.sendCommand("/create " + name + " " + type + " " + currentServer);
                 dialog.dispose();
             }
         });

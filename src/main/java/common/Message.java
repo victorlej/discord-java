@@ -13,7 +13,7 @@ public class Message implements Serializable {
     private MessageType type;
 
     public enum MessageType {
-        CHAT, SYSTEM, PRIVATE, FILE, USER_LIST, CHANNEL_LIST, CHANNEL_USERS, STATUS_UPDATE
+        CHAT, SYSTEM, PRIVATE, FILE, USER_LIST, CHANNEL_LIST, CHANNEL_USERS, STATUS_UPDATE, SERVER_LIST, CREATE_SERVER
     }
 
     private byte[] fileData;

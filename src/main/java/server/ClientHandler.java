@@ -4,7 +4,6 @@ import common.Message;
 import java.io.*;
 import java.net.*;
 import java.util.List;
-import java.util.List;
 
 public class ClientHandler implements Runnable {
     private Socket socket;
@@ -125,11 +124,16 @@ public class ClientHandler implements Runnable {
 
             // Envoyer la liste des salons
             Server.broadcastChannelList();
+            Server.broadcastServerList();
 
             // Boucle de réception
             while (true) {
                 Message msg = (Message) input.readObject();
-                handleCommand(msg);
+                if (msg.getType() == Message.MessageType.CREATE_SERVER) {
+                    Server.createServer(msg.getContent());
+                } else {
+                    handleCommand(msg);
+                }
             }
         } catch (EOFException e) {
             // Client disconnected gracefully-ish
@@ -194,15 +198,36 @@ public class ClientHandler implements Runnable {
             if (parts.length >= 2) {
                 String channelName = parts[1].trim();
                 String type = parts.length > 2 ? parts[2].toUpperCase() : "TEXT";
+                String server = "Main Server";
+                if (parts.length > 3) {
+                    server = String.join(" ", java.util.Arrays.copyOfRange(parts, 3, parts.length));
+                }
 
                 if (DatabaseManager.hasPermission(this.username, "perm_create_channel")) {
-                    Server.createChannel(channelName, type);
-                    sendMessage(new Message("System", "Salon #" + channelName + " (" + type + ") créé.", "system",
-                            Message.MessageType.SYSTEM));
-                } else {
-                    sendMessage(new Message("System", "Vous n'avez pas la permission de créer des salons.", "system",
+                    Server.createChannel(channelName, type, server);
+                    sendMessage(new Message("System",
+                            "Salon #" + channelName + " (" + type + ") créé dans " + server + ".", "system",
                             Message.MessageType.SYSTEM));
                 }
+            }
+        } else if (content.startsWith("/deleteserver ")) {
+            String srvName = content.substring(14).trim();
+            InetAddress addr = socket.getInetAddress();
+            boolean isLocalhost = addr.isLoopbackAddress() || addr.getHostAddress().equals("127.0.0.1")
+                    || addr.getHostAddress().equals("0:0:0:0:0:0:0:1");
+
+            if (isLocalhost) {
+                if ("Main Server".equals(srvName)) {
+                    sendMessage(new Message("System", "Impossible de supprimer le serveur principal.", "system",
+                            Message.MessageType.SYSTEM));
+                } else {
+                    Server.deleteServer(srvName);
+                    sendMessage(new Message("System", "Serveur '" + srvName + "' supprimé.", "system",
+                            Message.MessageType.SYSTEM));
+                }
+            } else {
+                sendMessage(
+                        new Message("System", "Action réservée au localhost.", "system", Message.MessageType.SYSTEM));
             }
         } else if (content.startsWith("/deletechannel ")) {
             String channelName = content.substring(15).trim();
@@ -237,8 +262,11 @@ public class ClientHandler implements Runnable {
                 ClientHandler targetClient = Server.clients.get(target);
                 if (targetClient != null)
                     targetClient.disconnect();
+
                 sendMessage(new Message("System", target + " a été bloqué.", "system", Message.MessageType.SYSTEM));
-            } else {
+            } else
+
+            {
                 sendMessage(new Message("System", "Commande réservée aux modérateurs.", "system",
                         Message.MessageType.SYSTEM));
             }
@@ -262,8 +290,11 @@ public class ClientHandler implements Runnable {
         } else if (content.startsWith("/getroles")) {
             List<String> roles = DatabaseManager.getAllRoles();
             String rolesStr = String.join(",", roles);
+
             sendMessage(new Message("System", rolesStr, "ROLES_LIST", Message.MessageType.SYSTEM));
-        } else if (content.startsWith("/deleterole ")) {
+        } else if (content.startsWith("/deleterole "))
+
+        {
             if (DatabaseManager.hasPermission(this.username, "perm_manage_roles")) {
                 String rName = content.substring(12).trim();
                 // Prevent deleting Admin role?

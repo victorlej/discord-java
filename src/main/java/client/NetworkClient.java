@@ -100,6 +100,10 @@ public class NetworkClient implements Runnable {
                 String[] channels = channelsCsv.split(",");
                 controller.updateChannelList(channels);
             }
+        } else if (msg.getType() == Message.MessageType.SERVER_LIST) {
+            String serversCsv = msg.getContent();
+            String[] servers = (serversCsv == null || serversCsv.isEmpty()) ? new String[0] : serversCsv.split(",");
+            controller.updateServerList(servers);
         } else if (msg.getType() == Message.MessageType.CHANNEL_USERS) {
             String usersCsv = msg.getContent();
             String[] users = (usersCsv == null || usersCsv.isEmpty()) ? new String[0] : usersCsv.split(",");

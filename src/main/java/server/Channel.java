@@ -7,12 +7,14 @@ import java.util.concurrent.ConcurrentHashMap;
 public class Channel {
     private String name;
     private String type; // TEXT or VOICE
+    private String serverName;
     private Set<ClientHandler> members = ConcurrentHashMap.newKeySet();
     private List<Message> history = new ArrayList<>();
 
-    public Channel(String name, String type) {
+    public Channel(String name, String type, String serverName) {
         this.name = name;
         this.type = type;
+        this.serverName = serverName;
     }
 
     public String getName() {
@@ -21,6 +23,10 @@ public class Channel {
 
     public String getType() {
         return type;
+    }
+
+    public String getServerName() {
+        return serverName;
     }
 
     public void broadcast(Message msg) {

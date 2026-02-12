@@ -39,7 +39,23 @@ public class DatabaseManager {
             try {
                 stmt.execute("ALTER TABLE channels ADD COLUMN type TEXT DEFAULT 'TEXT'");
             } catch (SQLException ignored) {
-                // La colonne existe probablement déjà
+            }
+
+            // Table SERVERS
+            String sqlServers = "CREATE TABLE IF NOT EXISTS servers (" +
+                    "name TEXT PRIMARY KEY" +
+                    ");";
+            stmt.execute(sqlServers);
+
+            // Migration canaux -> ajout colonne server_name
+            try {
+                stmt.execute("ALTER TABLE channels ADD COLUMN server_name TEXT DEFAULT 'Main Server'");
+            } catch (SQLException ignored) {
+            }
+
+            // Créer le serveur par défaut si aucun n'existe
+            if (!serverExists("Main Server")) {
+                createServer("Main Server");
             }
 
             // Table ROLES
@@ -94,10 +110,10 @@ public class DatabaseManager {
 
             // Insertion des salons par défaut si la table est vide
             if (getChannels().isEmpty()) {
-                createChannel("general", "TEXT");
-                createChannel("dev", "TEXT");
-                createChannel("gaming", "TEXT");
-                createChannel("vocal", "VOICE");
+                createChannel("general", "TEXT", "Main Server");
+                createChannel("dev", "TEXT", "Main Server");
+                createChannel("gaming", "TEXT", "Main Server");
+                createChannel("vocal", "VOICE", "Main Server");
             }
 
             System.out.println("✅ Base de données initialisée (SQLite).");
@@ -357,16 +373,85 @@ public class DatabaseManager {
 
     // --- GESTION SALONS ---
 
-    public static void createChannel(String name) {
-        createChannel(name, "TEXT");
+    // --- GESTION SERVERS ---
+
+    public static void createServer(String name) {
+        String sql = "INSERT OR IGNORE INTO servers(name) VALUES(?)";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
     }
 
-    public static void createChannel(String name, String type) {
-        String sql = "INSERT OR IGNORE INTO channels(name, type) VALUES(?, ?)";
+    public static boolean serverExists(String name) {
+        String sql = "SELECT 1 FROM servers WHERE name = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);
+            return pstmt.executeQuery().next();
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public static void deleteServer(String name) {
+        // First delete channels associated with server
+        String deleteChannels = "DELETE FROM channels WHERE server_name = ?";
+        String deleteServer = "DELETE FROM servers WHERE name = ?";
+
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try (PreparedStatement chStmt = conn.prepareStatement(deleteChannels);
+                    PreparedStatement srvStmt = conn.prepareStatement(deleteServer)) {
+
+                chStmt.setString(1, name);
+                chStmt.executeUpdate();
+
+                srvStmt.setString(1, name);
+                srvStmt.executeUpdate();
+
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                e.printStackTrace();
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static List<String> getServers() {
+        List<String> list = new ArrayList<>();
+        String sql = "SELECT name FROM servers";
+        try (Connection conn = getConnection();
+                Statement stmt = conn.createStatement();
+                ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                list.add(rs.getString("name"));
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return list;
+    }
+
+    // --- GESTION SALONS ---
+
+    public static void createChannel(String name, String serverName) {
+        createChannel(name, "TEXT", serverName);
+    }
+
+    public static void createChannel(String name, String type, String serverName) {
+        String sql = "INSERT OR IGNORE INTO channels(name, type, server_name) VALUES(?, ?, ?)";
         try (Connection conn = getConnection();
                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, name);
             pstmt.setString(2, type);
+            pstmt.setString(3, serverName);
             pstmt.executeUpdate();
         } catch (SQLException e) {
             e.printStackTrace();
@@ -399,21 +484,27 @@ public class DatabaseManager {
     public static class ChannelData {
         public String name;
         public String type;
+        public String serverName;
 
-        public ChannelData(String name, String type) {
+        public ChannelData(String name, String type, String serverName) {
             this.name = name;
             this.type = type;
+            this.serverName = serverName;
         }
     }
 
     public static List<ChannelData> getChannels() {
         List<ChannelData> channels = new ArrayList<>();
-        String sql = "SELECT name, type FROM channels";
+        String sql = "SELECT name, type, server_name FROM channels";
         try (Connection conn = getConnection();
                 Statement stmt = conn.createStatement();
                 ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) {
-                channels.add(new ChannelData(rs.getString("name"), rs.getString("type")));
+                // Compatible with NULL server_name (migration)
+                String srv = rs.getString("server_name");
+                if (srv == null)
+                    srv = "Main Server";
+                channels.add(new ChannelData(rs.getString("name"), rs.getString("type"), srv));
             }
         } catch (SQLException e) {
             e.printStackTrace();
