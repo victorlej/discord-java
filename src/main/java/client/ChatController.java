@@ -444,6 +444,19 @@ public class ChatController extends JFrame {
         voiceInfo.add(voiceTitle);
         voiceInfo.add(voiceStatusLabel);
 
+        JPanel voiceControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        voiceControls.setOpaque(false);
+
+        JButton soundboardBtn = new JButton("🎛️");
+        soundboardBtn.setToolTipText("Soundboard");
+        soundboardBtn.setBorderPainted(false);
+        soundboardBtn.setContentAreaFilled(false);
+        soundboardBtn.setFocusPainted(false);
+        soundboardBtn.setForeground(TEXT_NORMAL);
+        soundboardBtn.setFont(new Font("Segoe UI Emoji", Font.BOLD, 16));
+        soundboardBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        soundboardBtn.addActionListener(e -> showSoundboard());
+
         JButton sidebarHangUp = new JButton("❌");
         sidebarHangUp.setForeground(Color.RED);
         sidebarHangUp.setBorderPainted(false);
@@ -453,8 +466,11 @@ public class ChatController extends JFrame {
         sidebarHangUp.setCursor(new Cursor(Cursor.HAND_CURSOR));
         sidebarHangUp.addActionListener(e -> leaveVoiceChannel());
 
+        voiceControls.add(soundboardBtn);
+        voiceControls.add(sidebarHangUp);
+
         voiceControlPanel.add(voiceInfo, BorderLayout.CENTER);
-        voiceControlPanel.add(sidebarHangUp, BorderLayout.EAST);
+        voiceControlPanel.add(voiceControls, BorderLayout.EAST);
 
         leftPanel.add(voiceControlPanel, BorderLayout.SOUTH);
 
@@ -1509,6 +1525,35 @@ public class ChatController extends JFrame {
                 }
             }
         }
+    }
+
+    private void showSoundboard() {
+        JDialog dialog = new JDialog(this, "Soundboard", false);
+        dialog.setSize(320, 400);
+        dialog.setLocationRelativeTo(this);
+        dialog.getContentPane().setBackground(BG_DARK);
+
+        JPanel container = new JPanel(new GridLayout(4, 2, 10, 10));
+        container.setBackground(BG_DARK);
+        container.setBorder(new EmptyBorder(15, 15, 15, 15));
+
+        String[] sounds = { "Rahhh", "For Sure", "Hub", "Pew", "Serrano", "Reuf", "Roblox", "Fahhh" };
+
+        for (String sound : sounds) {
+            JButton btn = new ModernComponents.ModernButton(sound);
+            btn.setFont(new Font("Segoe UI Emoji", Font.BOLD, 12));
+            btn.addActionListener(e -> {
+                if (voiceManager != null) {
+                    // Nettoyage du nom pour trouver le fichier (ex: " Ba Dum Tss" -> "badumtss")
+                    String filename = sound.replaceAll("[^a-zA-Z0-9]", "").toLowerCase();
+                    voiceManager.playSoundEffect(filename);
+                }
+            });
+            container.add(btn);
+        }
+
+        dialog.add(container);
+        dialog.setVisible(true);
     }
 
     private void showCreateChannelDialog() {

@@ -2,6 +2,7 @@ package client;
 
 import javax.sound.sampled.*;
 import java.io.IOException;
+import java.io.File;
 import java.net.*;
 import java.util.function.Consumer;
 
@@ -208,6 +209,79 @@ public class VoiceManager {
                     e.printStackTrace();
             }
         }
+    }
+
+    public void playSoundEffect(String soundName) {
+        if (!active) return;
+
+        new Thread(() -> {
+            try {
+                // Cherche le fichier dans resources/sounds/ ou dossier local sounds/
+                String filename = soundName + ".wav";
+                URL url = getClass().getResource("/sounds/" + filename);
+                
+                if (url == null) {
+                    File f = new File("sounds/" + filename);
+                    if (f.exists()) {
+                        url = f.toURI().toURL();
+                    }
+                }
+
+                // Fallback: Cherche à la racine du projet (ex: rahhh.wav directement à côté de src)
+                if (url == null) {
+                    File f = new File(filename);
+                    if (f.exists()) {
+                        url = f.toURI().toURL();
+                    }
+                }
+
+                if (url == null) {
+                    System.err.println("[VoiceManager] Son introuvable: " + filename + " (Vérifiez qu'il est à la racine ou dans le dossier 'sounds')");
+                    return;
+                }
+                System.out.println("[VoiceManager] Lecture du son: " + url);
+
+                AudioInputStream audioIn = AudioSystem.getAudioInputStream(url);
+                AudioFormat targetFormat = new AudioFormat(8000.0f, 16, 1, true, true);
+                
+                if (!audioIn.getFormat().matches(targetFormat)) {
+                    if (AudioSystem.isConversionSupported(targetFormat, audioIn.getFormat())) {
+                        audioIn = AudioSystem.getAudioInputStream(targetFormat, audioIn);
+                    }
+                }
+
+                byte[] buffer = new byte[900];
+                int bytesRead;
+                long sleep = (long) (900.0 / 16000.0 * 1000.0); // Throttle sending
+
+                // Configuration d'une ligne audio locale pour entendre son propre son
+                SourceDataLine localSfxLine = null;
+                try {
+                    DataLine.Info info = new DataLine.Info(SourceDataLine.class, targetFormat);
+                    if (AudioSystem.isLineSupported(info)) {
+                        localSfxLine = (SourceDataLine) AudioSystem.getLine(info);
+                        localSfxLine.open(targetFormat);
+                        localSfxLine.start();
+                    }
+                } catch (Exception ex) {
+                    System.err.println("[VoiceManager] Impossible de jouer le son localement: " + ex.getMessage());
+                }
+
+                while ((bytesRead = audioIn.read(buffer)) != -1 && active) {
+                    byte[] data = new byte[bytesRead];
+                    System.arraycopy(buffer, 0, data, 0, bytesRead);
+                    sendPacket('A', data);
+                    if (localSfxLine != null) {
+                        localSfxLine.write(data, 0, bytesRead);
+                    }
+                    Thread.sleep(sleep);
+                }
+                if (localSfxLine != null) { localSfxLine.drain(); localSfxLine.close(); }
+                audioIn.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
     }
 
     private void sendPacket(char type, byte[] content) throws IOException {
