@@ -112,9 +112,33 @@ public class NetworkClient implements Runnable {
             String user = msg.getUsername();
             String status = msg.getContent();
             controller.updateUserStatus(user, status);
+            controller.updateUserStatus(user, status);
+        } else if (msg.getType() == Message.MessageType.FRIEND_LIST) {
+            String friendsCsv = msg.getContent();
+            String[] friends = (friendsCsv == null || friendsCsv.isEmpty()) ? new String[0] : friendsCsv.split(",");
+            controller.updateFriendList(friends);
+        } else if (msg.getType() == Message.MessageType.USER_INFO) {
+            String content = msg.getContent();
+            String[] parts = content.split("#");
+            if (parts.length == 2 && parts[0].equals(controller.getCurrentUser())) {
+                controller.setMyTag(parts[1]);
+            }
+        } else if (msg.getType() == Message.MessageType.PRIVATE) {
+            // Private message
+            controller.displayMessage(msg);
+            // Show notification if not currently viewing this DM
+            String sender = msg.getUsername();
+            if (!sender.equals(controller.getCurrentUser())) {
+                controller.showNotification("Message de " + sender, msg.getContent());
+            }
         } else {
+            // Check for call request
+            if ("call_request".equals(msg.getChannel())) {
+                String caller = msg.getContent();
+                controller.showIncomingCall(caller);
+            }
             // Check for Roles List special channel name hack (from ClientHandler code)
-            if ("ROLES_LIST".equals(msg.getChannel())) {
+            else if ("ROLES_LIST".equals(msg.getChannel())) {
                 String rolesCsv = msg.getContent();
                 String[] roles = (rolesCsv == null || rolesCsv.isEmpty()) ? new String[0] : rolesCsv.split(",");
                 controller.updateRoles(roles);
