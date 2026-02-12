@@ -157,6 +157,28 @@ public class ClientHandler implements Runnable {
             if (parts.length >= 3) {
                 sendPrivateMessage(parts[1], parts[2]);
             }
+        } else if (content.startsWith("/dm_history ")) {
+            // Load DM history: /dm_history targetUser
+            String targetUser = content.substring(12).trim();
+            String dmChannel = getDMChannelName(this.username, targetUser);
+            List<Message> history = DatabaseManager.getLastMessages(dmChannel, 50);
+            for (Message hMsg : history) {
+                sendMessage(hMsg);
+            }
+        } else if (content.startsWith("/call ")) {
+            // Voice call request: /call targetUser
+            String targetUser = content.substring(6).trim();
+            ClientHandler target = Server.clients.get(targetUser);
+            if (target != null) {
+                // Send call notification to target
+                target.sendMessage(
+                        new Message(this.username, this.username, "call_request", Message.MessageType.SYSTEM));
+                sendMessage(new Message("System", "Appel en cours vers " + targetUser + "...", "system",
+                        Message.MessageType.SYSTEM));
+            } else {
+                sendMessage(new Message("System", targetUser + " n'est pas connecté.", "system",
+                        Message.MessageType.SYSTEM));
+            }
         } else if (content.startsWith("/list")) {
             listChannels();
         } else if (content.startsWith("/createrole ")) {
@@ -270,6 +292,101 @@ public class ClientHandler implements Runnable {
                 sendMessage(new Message("System", "Commande réservée aux modérateurs.", "system",
                         Message.MessageType.SYSTEM));
             }
+        } else if (content.startsWith("/friend add ")) {
+            String target = content.substring(12).trim();
+            System.out.println("[DEBUG] /friend add called by " + this.username + " for target: " + target);
+            // Expected format: pseudo#tag
+            String[] parts = target.split("#");
+            if (parts.length == 2) {
+                String pseudo = parts[0];
+                String tag = parts[1];
+
+                System.out.println("[DEBUG] Parsed pseudo=" + pseudo + " tag=" + tag);
+
+                if (pseudo.equals(this.username)) {
+                    sendMessage(new Message("System", "Vous ne pouvez pas vous ajouter vous-même.", "system",
+                            Message.MessageType.SYSTEM));
+                } else if (!DatabaseManager.userExists(pseudo)) {
+                    System.out.println("[DEBUG] User " + pseudo + " does NOT exist in database");
+                    sendMessage(new Message("System", "L'utilisateur '" + pseudo + "' n'existe pas.", "system",
+                            Message.MessageType.SYSTEM));
+                } else {
+                    String actualTag = DatabaseManager.getUserTag(pseudo);
+                    System.out.println(
+                            "[DEBUG] Actual tag for " + pseudo + " is: " + actualTag + " (provided: " + tag + ")");
+
+                    if (actualTag != null && actualTag.equals(tag)) {
+                        // Auto-accept: status=1 directement
+                        DatabaseManager.addFriend(this.username, pseudo);
+                        System.out.println(
+                                "[DEBUG] addFriend called successfully for " + this.username + " -> " + pseudo);
+
+                        sendMessage(new Message("System", "Vous êtes maintenant ami avec " + pseudo + " !", "system",
+                                Message.MessageType.SYSTEM));
+
+                        // Notify target if online
+                        ClientHandler targetClient = Server.clients.get(pseudo);
+                        if (targetClient != null) {
+                            targetClient.sendMessage(new Message("System",
+                                    this.username + " vous a ajouté en ami !", "system",
+                                    Message.MessageType.SYSTEM));
+                        }
+
+                        // Refresh friend list
+                        List<String> friends = DatabaseManager.getFriends(this.username);
+                        System.out.println("[DEBUG] Friends list after add: " + friends);
+                        StringBuilder sb = new StringBuilder();
+                        for (String f : friends) {
+                            boolean online = Server.clients.containsKey(f);
+                            if (sb.length() > 0)
+                                sb.append(",");
+                            sb.append(f).append(":").append(online ? "Online" : "Offline");
+                        }
+                        sendMessage(new Message("System", sb.toString(), "friends", Message.MessageType.FRIEND_LIST));
+
+                        // Also send updated friend list to the target user if online
+                        if (targetClient != null) {
+                            List<String> targetFriends = DatabaseManager.getFriends(pseudo);
+                            StringBuilder sb2 = new StringBuilder();
+                            for (String f : targetFriends) {
+                                boolean onl = Server.clients.containsKey(f);
+                                if (sb2.length() > 0)
+                                    sb2.append(",");
+                                sb2.append(f).append(":").append(onl ? "Online" : "Offline");
+                            }
+                            targetClient.sendMessage(
+                                    new Message("System", sb2.toString(), "friends", Message.MessageType.FRIEND_LIST));
+                        }
+                    } else {
+                        sendMessage(new Message("System",
+                                "Tag incorrect pour " + pseudo + ". Vérifiez le tag.", "system",
+                                Message.MessageType.SYSTEM));
+                    }
+                }
+            } else {
+                sendMessage(new Message("System", "Format requis: pseudo#tag (ex: Victor#1234)", "system",
+                        Message.MessageType.SYSTEM));
+            }
+        } else if (content.startsWith("/friend list")) {
+            List<String> friends = DatabaseManager.getFriends(this.username);
+            StringBuilder sb = new StringBuilder();
+            for (String f : friends) {
+                boolean online = Server.clients.containsKey(f);
+                if (sb.length() > 0)
+                    sb.append(",");
+                sb.append(f).append(":").append(online ? "Online" : "Offline");
+            }
+            sendMessage(new Message("System", sb.toString(), "friends", Message.MessageType.FRIEND_LIST));
+        } else if (content.startsWith("/friend accept ")) {
+            String target = content.substring(15).trim();
+            DatabaseManager.acceptFriend(target, this.username);
+            sendMessage(new Message("System", "Vous êtes maintenant ami avec " + target, "system",
+                    Message.MessageType.SYSTEM));
+        } else if (content.startsWith("/myid")) {
+            String tag = DatabaseManager.getUserTag(this.username);
+            // Send as USER_INFO so client can handle it specifically (e.g. update UI)
+            sendMessage(new Message("System", this.username + "#" + tag, "user_info",
+                    Message.MessageType.USER_INFO));
         } else if (content.startsWith("/kick ")) {
             if (DatabaseManager.hasPermission(this.username, "perm_block")) {
                 String target = content.substring(6).trim();
@@ -354,8 +471,9 @@ public class ClientHandler implements Runnable {
         currentChannel.addMember(this);
 
         // Envoyer l'historique au nouveau membre (Optional TODO)
-        sendMessage(new Message("System", "Vous êtes maintenant dans #" + channelName, channelName,
-                Message.MessageType.SYSTEM));
+        // sendMessage(new Message("System", "Vous êtes maintenant dans #" +
+        // channelName, channelName,
+        // Message.MessageType.SYSTEM));
     }
 
     public void sendMessage(Message msg) {
@@ -369,14 +487,30 @@ public class ClientHandler implements Runnable {
     }
 
     private void sendPrivateMessage(String targetUser, String content) {
+        // Create consistent DM channel name (alphabetically sorted)
+        String dmChannel = getDMChannelName(this.username, targetUser);
+
+        Message privMsg = new Message(username, content, dmChannel, Message.MessageType.PRIVATE);
+
+        // Always save to database (history)
+        DatabaseManager.saveMessage(privMsg);
+
+        // Send to target if online
         ClientHandler target = Server.clients.get(targetUser);
         if (target != null) {
-            Message privMsg = new Message(username, content, "PM", Message.MessageType.PRIVATE);
             target.sendMessage(privMsg);
-            sendMessage(privMsg); // Echo to sender
+        }
+
+        // Echo to sender
+        sendMessage(privMsg);
+    }
+
+    private static String getDMChannelName(String user1, String user2) {
+        // Create consistent channel name regardless of order
+        if (user1.compareTo(user2) < 0) {
+            return "DM:" + user1 + ":" + user2;
         } else {
-            sendMessage(
-                    new Message("System", "Utilisateur non trouvé: " + targetUser, "PM", Message.MessageType.SYSTEM));
+            return "DM:" + user2 + ":" + user1;
         }
     }
 
@@ -392,6 +526,25 @@ public class ClientHandler implements Runnable {
                 currentChannel.removeMember(this);
             Server.removeClient(username);
             System.out.println(username + " déconnecté");
+
+            // Notify all friends that this user went offline
+            List<String> friends = DatabaseManager.getFriends(username);
+            for (String friendName : friends) {
+                ClientHandler friendHandler = Server.clients.get(friendName);
+                if (friendHandler != null) {
+                    // Send updated friend list to each online friend
+                    List<String> theirFriends = DatabaseManager.getFriends(friendName);
+                    StringBuilder sb = new StringBuilder();
+                    for (String f : theirFriends) {
+                        boolean online = Server.clients.containsKey(f);
+                        if (sb.length() > 0)
+                            sb.append(",");
+                        sb.append(f).append(":").append(online ? "Online" : "Offline");
+                    }
+                    friendHandler.sendMessage(
+                            new Message("System", sb.toString(), "friends", Message.MessageType.FRIEND_LIST));
+                }
+            }
         }
         try {
             socket.close();

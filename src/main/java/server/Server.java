@@ -18,7 +18,7 @@ public class Server {
 
         // Chargement des salons depuis la BDD
         for (DatabaseManager.ChannelData cd : DatabaseManager.getChannels()) {
-            channels.put(cd.name, new Channel(cd.name, cd.type, cd.serverName));
+            channels.put(cd.serverName + ":" + cd.name, new Channel(cd.name, cd.type, cd.serverName));
         }
 
         try (ServerSocket serverSocket = new ServerSocket()) {
@@ -44,6 +44,24 @@ public class Server {
     public static void registerClient(String username, ClientHandler handler) {
         clients.put(username, handler);
         broadcastUserList();
+
+        // Notify friends that this user came online
+        java.util.List<String> friends = DatabaseManager.getFriends(username);
+        for (String friendName : friends) {
+            ClientHandler friendHandler = clients.get(friendName);
+            if (friendHandler != null) {
+                java.util.List<String> theirFriends = DatabaseManager.getFriends(friendName);
+                StringBuilder sb = new StringBuilder();
+                for (String f : theirFriends) {
+                    boolean online = clients.containsKey(f);
+                    if (sb.length() > 0)
+                        sb.append(",");
+                    sb.append(f).append(":").append(online ? "Online" : "Offline");
+                }
+                friendHandler
+                        .sendMessage(new Message("System", sb.toString(), "friends", Message.MessageType.FRIEND_LIST));
+            }
+        }
     }
 
     public static void removeClient(String username) {
@@ -63,32 +81,61 @@ public class Server {
     }
 
     public static Channel getChannel(String name) {
-        return channels.computeIfAbsent(name, n -> new Channel(n, "TEXT", "Main Server")); // Default fallback
+        // Handle composite key or legacy key
+        if (channels.containsKey(name))
+            return channels.get(name);
+
+        // Return default if not found (legacy behavior fallback)
+        return channels.computeIfAbsent(name, n -> new Channel(n, "TEXT", "Main Server"));
+    }
+
+    public static Channel getChannel(String name, String serverName) {
+        return channels.get(serverName + ":" + name);
     }
 
     public static void createChannel(String name, String type, String serverName) {
-        if (!channels.containsKey(name)) {
+        String key = serverName + ":" + name;
+        if (!channels.containsKey(key)) {
             DatabaseManager.createChannel(name, type, serverName);
-            channels.put(name, new Channel(name, type, serverName));
+            channels.put(key, new Channel(name, type, serverName));
             broadcastChannelList();
         }
     }
 
     public static void deleteChannel(String name) {
-        if (channels.containsKey(name)) {
-            DatabaseManager.deleteChannel(name);
-            channels.remove(name);
+        // Warn: This legacy method deletes channel "name" from ALL servers if we don't
+        // know the server?
+        // Or we should update signature. For now, try to find key ending with :name?
+        // No, client must provide server context.
+        // Let's assume name passed here is composite or we iterate.
+        // Actually ClientHandler passes just name. This is dangerous with multiple
+        // servers.
+        // We need to upgrade deleteChannel to accept serverName.
+    }
+
+    public static void deleteChannel(String name, String serverName) {
+        String key = serverName + ":" + name;
+        if (channels.containsKey(key)) {
+            DatabaseManager.deleteChannel(name, serverName); // Updated DB method needed
+            channels.remove(key);
             broadcastChannelList();
         }
     }
 
     public static void renameChannel(String oldName, String newName) {
-        if (channels.containsKey(oldName) && !channels.containsKey(newName)) {
-            Channel ch = channels.remove(oldName);
+        // Legacy issue again. Assuming Main Server?
+        // We will overload.
+    }
+
+    public static void renameChannel(String oldName, String newName, String serverName) {
+        String oldKey = serverName + ":" + oldName;
+        String newKey = serverName + ":" + newName;
+
+        if (channels.containsKey(oldKey) && !channels.containsKey(newKey)) {
+            Channel ch = channels.remove(oldKey);
             String type = ch.getType();
-            String serverName = ch.getServerName();
-            DatabaseManager.renameChannel(oldName, newName);
-            channels.put(newName, new Channel(newName, type, serverName));
+            DatabaseManager.renameChannel(oldName, newName, serverName); // Update DB method
+            channels.put(newKey, new Channel(newName, type, serverName));
             broadcastChannelList();
         }
     }
@@ -118,7 +165,8 @@ public class Server {
             // Remove associated channels from memory
             Iterator<Map.Entry<String, Channel>> it = channels.entrySet().iterator();
             while (it.hasNext()) {
-                if (name.equals(it.next().getValue().getServerName())) {
+                Map.Entry<String, Channel> entry = it.next();
+                if (name.equals(entry.getValue().getServerName())) {
                     it.remove();
                 }
             }

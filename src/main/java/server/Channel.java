@@ -46,8 +46,8 @@ public class Channel {
         }
 
         members.add(client);
-        broadcast(
-                new Message("System", client.getUsername() + " a rejoint #" + name, name, Message.MessageType.SYSTEM));
+        // broadcast(new Message("System", client.getUsername() + " a rejoint #" + name,
+        // name, Message.MessageType.SYSTEM));
 
         // Broadcast updated member list for this channel
         broadcastMemberList();
@@ -55,7 +55,8 @@ public class Channel {
 
     public void removeMember(ClientHandler client) {
         members.remove(client);
-        broadcast(new Message("System", client.getUsername() + " a quitté #" + name, name, Message.MessageType.SYSTEM));
+        // broadcast(new Message("System", client.getUsername() + " a quitté #" + name,
+        // name, Message.MessageType.SYSTEM));
         broadcastMemberList();
     }
 

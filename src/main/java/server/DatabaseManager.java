@@ -17,23 +17,32 @@ public class DatabaseManager {
             String sqlUsers = "CREATE TABLE IF NOT EXISTS users (" +
                     "username TEXT PRIMARY KEY, " +
                     "password TEXT, " +
+                    "tag TEXT DEFAULT '0000', " +
                     "blocked BOOLEAN DEFAULT 0, " +
                     "can_create_channel BOOLEAN DEFAULT 0" +
                     ");";
             stmt.execute(sqlUsers);
+
+            // Migration TAG
+            try {
+                stmt.execute("ALTER TABLE users ADD COLUMN tag TEXT DEFAULT '0000'");
+            } catch (SQLException ignored) {
+            }
+
+            // Table FRIENDS
+            String sqlFriends = "CREATE TABLE IF NOT EXISTS friends (" +
+                    "user1 TEXT, " +
+                    "user2 TEXT, " +
+                    "status INTEGER DEFAULT 0, " + // 0: Pending, 1: Accepted
+                    "PRIMARY KEY(user1, user2)" +
+                    ");";
+            stmt.execute(sqlFriends);
 
             // Migration: ajout colonne password
             try {
                 stmt.execute("ALTER TABLE users ADD COLUMN password TEXT");
             } catch (SQLException ignored) {
             }
-
-            // Table CHANNELS
-            String sqlChannels = "CREATE TABLE IF NOT EXISTS channels (" +
-                    "name TEXT PRIMARY KEY, " +
-                    "type TEXT DEFAULT 'TEXT'" +
-                    ");";
-            stmt.execute(sqlChannels);
 
             // Migration simple: ajout de la colonne type si elle manque
             try {
@@ -51,6 +60,61 @@ public class DatabaseManager {
             try {
                 stmt.execute("ALTER TABLE channels ADD COLUMN server_name TEXT DEFAULT 'Main Server'");
             } catch (SQLException ignored) {
+            }
+
+            // Fix PK constraint: Check if channels table needs migration (Composite PK)
+            boolean migrationNeeded = false;
+            try {
+                // SQLite specific query to get PK info
+                try (ResultSet rs = stmt.executeQuery("PRAGMA table_info('channels')")) {
+                    int pkCount = 0;
+                    while (rs.next()) {
+                        if (rs.getInt("pk") > 0)
+                            pkCount++;
+                    }
+                    if (pkCount == 1)
+                        migrationNeeded = true; // Old schema had only 'name' as PK
+                }
+            } catch (SQLException e) {
+                // Ignore
+            }
+
+            if (migrationNeeded) {
+                System.out.println("⚠️ Migration de la table channels (PK) requise...");
+                try {
+                    conn.setAutoCommit(false);
+                    // Create new table with correct schema
+                    stmt.execute(
+                            "CREATE TABLE channels_new (name TEXT, type TEXT DEFAULT 'TEXT', server_name TEXT DEFAULT 'Main Server', PRIMARY KEY(name, server_name))");
+                    // Copy data
+                    stmt.execute(
+                            "INSERT INTO channels_new(name, type, server_name) SELECT name, type, server_name FROM channels");
+                    // Swap
+                    stmt.execute("DROP TABLE channels");
+                    stmt.execute("ALTER TABLE channels_new RENAME TO channels");
+                    conn.commit();
+                    System.out.println("✅ Migration PK terminée.");
+                } catch (SQLException e) {
+                    try {
+                        conn.rollback();
+                    } catch (SQLException ex) {
+                    }
+                    e.printStackTrace();
+                } finally {
+                    try {
+                        conn.setAutoCommit(true);
+                    } catch (SQLException ex) {
+                    }
+                }
+            } else {
+                // Ensure table exists with correct schema if it didn't exist
+                String sqlChannels = "CREATE TABLE IF NOT EXISTS channels (" +
+                        "name TEXT, " +
+                        "type TEXT DEFAULT 'TEXT', " +
+                        "server_name TEXT DEFAULT 'Main Server', " +
+                        "PRIMARY KEY(name, server_name)" +
+                        ");";
+                stmt.execute(sqlChannels);
             }
 
             // Créer le serveur par défaut si aucun n'existe
@@ -129,16 +193,95 @@ public class DatabaseManager {
     // --- GESTION UTILISATEURS ---
 
     public static boolean registerUser(String username, String password) {
-        String sql = "INSERT INTO users(username, password) VALUES(?, ?)";
+        // Generate random 4-digit tag
+        String tag = String.format("%04d", new java.util.Random().nextInt(10000));
+
+        String sql = "INSERT INTO users(username, password, tag) VALUES(?, ?, ?)";
         try (Connection conn = getConnection();
                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, username);
             pstmt.setString(2, password);
+            pstmt.setString(3, tag);
             pstmt.executeUpdate();
             return true;
         } catch (SQLException e) {
             // e.printStackTrace(); // Likely duplicate key
             return false;
+        }
+    }
+
+    public static String getUserTag(String username) {
+        String sql = "SELECT tag FROM users WHERE username = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next())
+                    return rs.getString("tag");
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return "0000";
+    }
+
+    public static List<String> getFriends(String username) {
+        List<String> list = new ArrayList<>();
+        // Get friends where status=1
+        String sql = "SELECT user2 as friend FROM friends WHERE user1 = ? AND status = 1 " +
+                "UNION SELECT user1 as friend FROM friends WHERE user2 = ? AND status = 1";
+
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, username);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next())
+                    list.add(rs.getString("friend"));
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+        return list;
+    }
+
+    public static void addFriend(String fromUser, String toUser) {
+        String sql = "INSERT OR REPLACE INTO friends(user1, user2, status) VALUES(?, ?, 1)";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, fromUser);
+            pstmt.setString(2, toUser);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void addFriendRequest(String fromUser, String toUser) {
+        String sql = "INSERT OR IGNORE INTO friends(user1, user2, status) VALUES(?, ?, 0)";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, fromUser);
+            pstmt.setString(2, toUser);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static boolean areFriends(String user1, String user2) {
+        return getFriends(user1).contains(user2);
+    }
+
+    public static void acceptFriend(String requester, String accepter) {
+        String sql = "UPDATE friends SET status = 1 WHERE user1 = ? AND user2 = ?";
+        try (Connection conn = getConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, requester);
+            pstmt.setString(2, accepter);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
         }
     }
 
@@ -458,11 +601,16 @@ public class DatabaseManager {
         }
     }
 
-    public static void deleteChannel(String name) {
-        String sql = "DELETE FROM channels WHERE name = ?";
+    public static void deleteChannel(String name) { // Legacy
+        deleteChannel(name, "Main Server");
+    }
+
+    public static void deleteChannel(String name, String serverName) {
+        String sql = "DELETE FROM channels WHERE name = ? AND server_name = ?";
         try (Connection conn = getConnection();
                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, name);
+            pstmt.setString(2, serverName);
             pstmt.executeUpdate();
         } catch (SQLException e) {
             e.printStackTrace();
@@ -470,11 +618,16 @@ public class DatabaseManager {
     }
 
     public static void renameChannel(String oldName, String newName) {
-        String sql = "UPDATE channels SET name = ? WHERE name = ?";
+        renameChannel(oldName, newName, "Main Server");
+    }
+
+    public static void renameChannel(String oldName, String newName, String serverName) {
+        String sql = "UPDATE channels SET name = ? WHERE name = ? AND server_name = ?";
         try (Connection conn = getConnection();
                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, newName);
             pstmt.setString(2, oldName);
+            pstmt.setString(3, serverName);
             pstmt.executeUpdate();
         } catch (SQLException e) {
             e.printStackTrace();
