@@ -14,7 +14,7 @@ public class Message implements Serializable {
 
     public enum MessageType {
         CHAT, SYSTEM, PRIVATE, FILE, USER_LIST, CHANNEL_LIST, CHANNEL_USERS, STATUS_UPDATE, SERVER_LIST, CREATE_SERVER,
-        FRIEND_LIST, FRIEND_REQUEST, FRIEND_UPDATE, USER_INFO
+        FRIEND_LIST, FRIEND_REQUEST, FRIEND_UPDATE, USER_INFO, TYPING, EDIT, DELETE
     }
 
     private byte[] fileData;

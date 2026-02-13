@@ -1,0 +1,3 @@
+=== Java version === 
+=== Compiling === 
+EXIT=-1 

@@ -425,15 +425,39 @@ public class ClientHandler implements Runnable {
                     sendRolesList(); // Update client
                 }
             }
-        } else if (content.startsWith("/status")) {
-            String[] parts = content.split(" ");
-            if (parts.length >= 2) {
-                String newStatus = parts[1].toUpperCase();
-                // Diffuser le statut à tous les clients connectés (global broadcast)
-                Message statusMsg = new Message(this.username, newStatus, "GLOBAL", Message.MessageType.STATUS_UPDATE);
-                for (ClientHandler client : Server.clients.values()) {
-                    client.sendMessage(statusMsg);
+        } else if (content.startsWith("/status ")) {
+            String statusPart = content.substring(8).trim();
+            // Diffuser le statut à tous les clients connectés (global broadcast)
+            Message statusMsg = new Message(this.username, statusPart, "GLOBAL", Message.MessageType.STATUS_UPDATE);
+            for (ClientHandler client : Server.clients.values()) {
+                client.sendMessage(statusMsg);
+            }
+        } else if (content.startsWith("/typing")) {
+            // Broadcast typing indicator to current channel
+            if (currentChannel != null) {
+                Message typingMsg = new Message(this.username, this.username, currentChannel.getName(),
+                        Message.MessageType.TYPING);
+                for (ClientHandler member : currentChannel.getMembers()) {
+                    if (member != this) {
+                        member.sendMessage(typingMsg);
+                    }
                 }
+            }
+        } else if (content.startsWith("/typing_dm ")) {
+            // Typing in DM: /typing_dm targetUser
+            String targetUser = content.substring(11).trim();
+            ClientHandler target = Server.clients.get(targetUser);
+            if (target != null) {
+                target.sendMessage(new Message(this.username, this.username, "typing_dm",
+                        Message.MessageType.TYPING));
+            }
+        } else if (content.startsWith("/delete ")) {
+            // Delete message: /delete messageText
+            String msgText = content.substring(8);
+            if (currentChannel != null) {
+                Message deleteMsg = new Message(this.username, msgText, currentChannel.getName(),
+                        Message.MessageType.DELETE);
+                currentChannel.broadcast(deleteMsg);
             }
         } else if (content.startsWith("/passwd")) {
             String[] parts = content.split(" ", 2);

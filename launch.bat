@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+set JAVA_HOME=C:\Program Files\Java\jdk-23
+set PATH=%JAVA_HOME%\bin;%PATH%
+
 echo [1/4] Checking environment...
 if not exist "lib" mkdir "lib"
 if not exist "bin" mkdir "bin"

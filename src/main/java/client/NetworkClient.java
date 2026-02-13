@@ -112,7 +112,6 @@ public class NetworkClient implements Runnable {
             String user = msg.getUsername();
             String status = msg.getContent();
             controller.updateUserStatus(user, status);
-            controller.updateUserStatus(user, status);
         } else if (msg.getType() == Message.MessageType.FRIEND_LIST) {
             String friendsCsv = msg.getContent();
             String[] friends = (friendsCsv == null || friendsCsv.isEmpty()) ? new String[0] : friendsCsv.split(",");
@@ -131,6 +130,15 @@ public class NetworkClient implements Runnable {
             if (!sender.equals(controller.getCurrentUser())) {
                 controller.showNotification("Message de " + sender, msg.getContent());
             }
+        } else if (msg.getType() == Message.MessageType.TYPING) {
+            // Typing indicator
+            String typingUser = msg.getContent();
+            if (!typingUser.equals(controller.getCurrentUser())) {
+                controller.showTypingIndicator(typingUser);
+            }
+        } else if (msg.getType() == Message.MessageType.DELETE) {
+            // Message deletion
+            controller.deleteMessageFromChat(msg.getUsername(), msg.getContent());
         } else {
             // Check for call request
             if ("call_request".equals(msg.getChannel())) {

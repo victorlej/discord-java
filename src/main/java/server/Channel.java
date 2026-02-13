@@ -29,6 +29,10 @@ public class Channel {
         return serverName;
     }
 
+    public Set<ClientHandler> getMembers() {
+        return members;
+    }
+
     public void broadcast(Message msg) {
         // Sauvegarder uniquement les messages de chat
         if (msg.getType() == Message.MessageType.CHAT || msg.getType() == Message.MessageType.FILE) {
