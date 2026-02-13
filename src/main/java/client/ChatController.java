@@ -2594,6 +2594,8 @@ public class ChatController extends JFrame {
 
         dialog.add(container);
         dialog.setVisible(true);
+    }
+
     private void switchToHome() {
         centerLayout.show(centerPanel, "FRIENDS");
         currentServer = null;
@@ -3411,35 +3413,6 @@ public class ChatController extends JFrame {
         JLabel l = new JLabel(text);
         l.setForeground(TEXT_GRAY);
         return l;
-    }
-
-    private JButton createRoundButton(String text, String tooltip) {
-        JButton btn = new JButton(text) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                if (getModel().isPressed()) {
-                    g2.setColor(getBackground().darker());
-                } else if (getModel().isRollover()) {
-                    g2.setColor(getBackground().brighter());
-                } else {
-                    g2.setColor(getBackground());
-                }
-                g2.fillOval(0, 0, getWidth(), getHeight());
-                g2.dispose();
-                super.paintComponent(g);
-            }
-        };
-        btn.setToolTipText(tooltip);
-        btn.setForeground(Color.WHITE);
-        btn.setBorderPainted(false);
-        btn.setContentAreaFilled(false);
-        btn.setFocusPainted(false);
-        btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 24));
-        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        btn.setPreferredSize(new Dimension(50, 50));
-        return btn;
     }
 
     private ImageIcon voiceIcon;
