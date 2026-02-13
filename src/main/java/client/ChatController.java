@@ -170,6 +170,11 @@ public class ChatController extends JFrame {
     private JPanel voiceControlPanel;
     private JLabel voiceStatusLabel;
 
+    // Typing indicator
+    private JLabel typingLabel;
+    private javax.swing.Timer typingClearTimer;
+    private long lastTypingSent = 0;
+
     private static final String CONFIG_FILE = "client_config.properties";
 
     public void updateUserStatus(String username, String status) {
@@ -208,101 +213,372 @@ public class ChatController extends JFrame {
     }
 
     private void showUserProfile() {
-        JDialog dialog = new JDialog(this, "Mon Profil", true);
-        dialog.setSize(400, 350);
-        dialog.setLocationRelativeTo(this);
-        dialog.getContentPane().setBackground(BG_DARK);
-        dialog.setLayout(new BoxLayout(dialog.getContentPane(), BoxLayout.Y_AXIS));
-        ((JPanel) dialog.getContentPane()).setBorder(new EmptyBorder(20, 20, 20, 20));
-
-        JLabel title = new JLabel("Profil de " + currentUser);
-        title.setForeground(Color.WHITE);
-        title.setFont(new Font("Segoe UI", Font.BOLD, 18));
-        title.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        // Avatar Preview
-        JLabel avatar = new JLabel(ModernComponents.generateAvatar(currentUser, 64));
-        avatar.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        // Show Tag directly
-        String tagDisplay = currentUser + " #" + (userTag != null ? userTag : "????");
-        JLabel tagLabel = new JLabel(tagDisplay);
-        tagLabel.setForeground(new Color(185, 187, 190)); // Light Gray
-        tagLabel.setFont(new Font("Segoe UI", Font.BOLD, 24)); // Big Font
-        tagLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-        tagLabel.setBorder(new EmptyBorder(10, 0, 10, 0));
-
         // If tag is unknown, request it
-        if (userTag == null) {
+        if (userTag == null && networkClient != null) {
             networkClient.sendCommand("/myid");
         }
 
-        // Status Selector
-        JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        statusPanel.setBackground(BG_DARK);
-        statusPanel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(TEXT_GRAY), "Statut", 0, 0, new Font("Segoe UI", Font.PLAIN, 12),
-                TEXT_GRAY));
+        JDialog dialog = new JDialog(this, "Mon Profil", true);
+        dialog.setUndecorated(true);
+        dialog.setSize(420, 560);
+        dialog.setLocationRelativeTo(this);
+        dialog.setBackground(new Color(0, 0, 0, 0));
 
-        String[] statuses = { "En Ligne", "Absent", "Ne pas déranger" };
-        JComboBox<String> statusBox = new JComboBox<>(statuses);
-        statusBox.addActionListener(e -> {
-            String selected = (String) statusBox.getSelectedItem();
-            String code = "ONLINE";
-            if (selected.equals("Absent"))
-                code = "IDLE";
-            if (selected.equals("Ne pas déranger"))
-                code = "DND";
-            networkClient.sendCommand("/status " + code);
-            updateUserStatus(currentUser, code); // Optimistic update
-        });
-        statusPanel.add(statusBox);
-        statusPanel.add(statusBox);
-        // Tag label added to main dialog
+        // --- Main Card Panel with rounded corners ---
+        JPanel card = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                // Card background
+                g2.setColor(new Color(30, 31, 34));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 20, 20);
+                // Subtle border
+                g2.setColor(new Color(255, 255, 255, 15));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 20, 20);
+                g2.dispose();
+            }
+        };
+        card.setLayout(new BorderLayout());
+        card.setOpaque(false);
 
-        dialog.add(title);
-        dialog.add(Box.createVerticalStrut(10));
-        dialog.add(avatar);
-        dialog.add(Box.createVerticalStrut(10));
-        dialog.add(tagLabel);
-        dialog.add(Box.createVerticalStrut(10));
-        dialog.add(statusPanel); // Contains status selector
-        dialog.add(Box.createVerticalStrut(10));
+        // --- Banner (gradient top) ---
+        int bannerHeight = 120;
+        int avatarSize = 90;
+        int avatarBorderSize = 6;
 
-        // Password Change
-        JPanel passPanel = new JPanel(new GridLayout(2, 2, 5, 5));
-        passPanel.setBackground(BG_DARK);
-        passPanel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(TEXT_GRAY), "Changer le mot de passe", 0, 0,
-                new Font("Segoe UI", Font.PLAIN, 12), TEXT_GRAY));
+        // Determine accent color for banner from avatar
+        int hash = currentUser.hashCode();
+        Color[] palette = {
+                new Color(218, 55, 60),
+                new Color(88, 101, 242),
+                new Color(87, 242, 135),
+                new Color(254, 231, 92),
+                new Color(235, 69, 158)
+        };
+        Color bannerColor1 = palette[Math.abs(hash) % palette.length];
+        Color bannerColor2 = bannerColor1.darker().darker();
+
+        // Top section: banner + avatar overlay
+        JPanel topSection = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+                // Clip to top rounded corners
+                g2.setClip(new java.awt.geom.RoundRectangle2D.Float(0, 0, getWidth(), getHeight() + 20, 20, 20));
+
+                // Gradient banner
+                GradientPaint gp = new GradientPaint(0, 0, bannerColor1, getWidth(), bannerHeight, bannerColor2);
+                g2.setPaint(gp);
+                g2.fillRect(0, 0, getWidth(), bannerHeight);
+
+                // Dark area below banner
+                g2.setColor(new Color(30, 31, 34));
+                g2.fillRect(0, bannerHeight, getWidth(), getHeight() - bannerHeight);
+
+                // Avatar background circle (dark ring)
+                int avatarX = 30;
+                int avatarY = bannerHeight - avatarSize / 2 - avatarBorderSize;
+                g2.setColor(new Color(30, 31, 34));
+                g2.fillOval(avatarX - avatarBorderSize, avatarY - avatarBorderSize,
+                        avatarSize + avatarBorderSize * 2, avatarSize + avatarBorderSize * 2);
+
+                // Draw avatar
+                ImageIcon avatarIcon = ModernComponents.generateAvatar(currentUser, avatarSize);
+                g2.drawImage(avatarIcon.getImage(), avatarX, avatarY, avatarSize, avatarSize, null);
+
+                // Status dot
+                String currentStatus = userStatuses.getOrDefault(currentUser, "ONLINE");
+                Color statusColor;
+                switch (currentStatus) {
+                    case "IDLE":
+                        statusColor = new Color(250, 168, 26);
+                        break;
+                    case "DND":
+                        statusColor = new Color(237, 66, 69);
+                        break;
+                    case "INVISIBLE":
+                        statusColor = new Color(116, 127, 141);
+                        break;
+                    default:
+                        statusColor = new Color(35, 165, 90);
+                        break;
+                }
+                int dotSize = 22;
+                int dotX = avatarX + avatarSize - dotSize + 4;
+                int dotY = avatarY + avatarSize - dotSize + 4;
+                g2.setColor(new Color(30, 31, 34));
+                g2.fillOval(dotX - 3, dotY - 3, dotSize + 6, dotSize + 6);
+                g2.setColor(statusColor);
+                g2.fillOval(dotX, dotY, dotSize, dotSize);
+
+                g2.dispose();
+            }
+        };
+        topSection.setPreferredSize(new Dimension(420, bannerHeight + avatarSize / 2 + 10));
+        topSection.setOpaque(false);
+        topSection.setLayout(null); // Absolute positioning for close button
+
+        // Close button (X) top right
+        JButton closeX = new JButton("✕") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                if (getModel().isRollover()) {
+                    g2.setColor(new Color(255, 255, 255, 30));
+                    g2.fillOval(0, 0, getWidth(), getHeight());
+                }
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        closeX.setForeground(new Color(200, 200, 200));
+        closeX.setFont(new Font("Segoe UI", Font.PLAIN, 18));
+        closeX.setBorderPainted(false);
+        closeX.setContentAreaFilled(false);
+        closeX.setFocusPainted(false);
+        closeX.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        closeX.setBounds(375, 8, 36, 36);
+        closeX.addActionListener(e -> dialog.dispose());
+        topSection.add(closeX);
+
+        card.add(topSection, BorderLayout.NORTH);
+
+        // --- Content section ---
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setOpaque(false);
+        content.setBorder(new EmptyBorder(10, 25, 20, 25));
+
+        // Username + Tag
+        String tagStr = userTag != null ? userTag : "????";
+        JPanel namePanel = new JPanel();
+        namePanel.setLayout(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        namePanel.setOpaque(false);
+        namePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel usernameLabel = new JLabel(currentUser);
+        usernameLabel.setForeground(Color.WHITE);
+        usernameLabel.setFont(new Font("Segoe UI", Font.BOLD, 22));
+
+        JLabel tagLabel = new JLabel("  #" + tagStr);
+        tagLabel.setForeground(new Color(142, 146, 151));
+        tagLabel.setFont(new Font("Segoe UI", Font.PLAIN, 18));
+
+        namePanel.add(usernameLabel);
+        namePanel.add(tagLabel);
+        content.add(namePanel);
+        content.add(Box.createVerticalStrut(15));
+
+        // --- Info card (dark inset) ---
+        JPanel infoCard = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(17, 18, 20));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
+                g2.dispose();
+            }
+        };
+        infoCard.setLayout(new BoxLayout(infoCard, BoxLayout.Y_AXIS));
+        infoCard.setOpaque(false);
+        infoCard.setBorder(new EmptyBorder(14, 16, 14, 16));
+        infoCard.setAlignmentX(Component.LEFT_ALIGNMENT);
+        infoCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 200));
+
+        // -- Statut section --
+        JLabel statusSectionLabel = new JLabel("STATUT");
+        statusSectionLabel.setForeground(new Color(185, 187, 190));
+        statusSectionLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        statusSectionLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        infoCard.add(statusSectionLabel);
+        infoCard.add(Box.createVerticalStrut(8));
+
+        // Status buttons row
+        JPanel statusRow = new JPanel(new GridLayout(1, 4, 6, 0));
+        statusRow.setOpaque(false);
+        statusRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        statusRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
+
+        String[][] statusOptions = {
+                { "🟢", "En ligne", "ONLINE" },
+                { "🟡", "Absent", "IDLE" },
+                { "🔴", "Occupé", "DND" },
+                { "⚫", "Invisible", "INVISIBLE" }
+        };
+
+        String currentStatusCode = userStatuses.getOrDefault(currentUser, "ONLINE");
+        for (String[] opt : statusOptions) {
+            String icon = opt[0];
+            String label = opt[1];
+            String code = opt[2];
+            boolean isActive = code.equals(currentStatusCode);
+
+            JButton statusBtn = new JButton(icon + " " + label) {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(getBackground());
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+                    g2.dispose();
+                    super.paintComponent(g);
+                }
+            };
+            statusBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+            statusBtn.setForeground(isActive ? Color.WHITE : new Color(142, 146, 151));
+            statusBtn.setBackground(isActive ? new Color(88, 101, 242) : new Color(43, 45, 49));
+            statusBtn.setBorderPainted(false);
+            statusBtn.setContentAreaFilled(false);
+            statusBtn.setFocusPainted(false);
+            statusBtn.setOpaque(false);
+            statusBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            statusBtn.setBorder(new EmptyBorder(6, 4, 6, 4));
+            statusBtn.addActionListener(e -> {
+                networkClient.sendCommand("/status " + code);
+                updateUserStatus(currentUser, code);
+                dialog.dispose();
+                showUserProfile(); // Reopen to refresh visuals
+            });
+            statusRow.add(statusBtn);
+        }
+        infoCard.add(statusRow);
+
+        // Separator
+        infoCard.add(Box.createVerticalStrut(12));
+        JSeparator sep = new JSeparator();
+        sep.setForeground(new Color(50, 52, 57));
+        sep.setBackground(new Color(50, 52, 57));
+        sep.setAlignmentX(Component.LEFT_ALIGNMENT);
+        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+        infoCard.add(sep);
+        infoCard.add(Box.createVerticalStrut(12));
+
+        // -- Membre depuis --
+        JLabel memberLabel = new JLabel("MEMBRE DEPUIS");
+        memberLabel.setForeground(new Color(185, 187, 190));
+        memberLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        memberLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        infoCard.add(memberLabel);
+        infoCard.add(Box.createVerticalStrut(4));
+
+        String joinDate = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy"));
+        JLabel dateLabel = new JLabel(joinDate);
+        dateLabel.setForeground(new Color(220, 221, 222));
+        dateLabel.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        dateLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        infoCard.add(dateLabel);
+
+        content.add(infoCard);
+        content.add(Box.createVerticalStrut(14));
+
+        // --- Password Card ---
+        JPanel passCard = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(17, 18, 20));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
+                g2.dispose();
+            }
+        };
+        passCard.setLayout(new BoxLayout(passCard, BoxLayout.Y_AXIS));
+        passCard.setOpaque(false);
+        passCard.setBorder(new EmptyBorder(14, 16, 14, 16));
+        passCard.setAlignmentX(Component.LEFT_ALIGNMENT);
+        passCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, 120));
+
+        JLabel passTitle = new JLabel("CHANGER LE MOT DE PASSE");
+        passTitle.setForeground(new Color(185, 187, 190));
+        passTitle.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        passTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        passCard.add(passTitle);
+        passCard.add(Box.createVerticalStrut(10));
+
+        JPanel passRow = new JPanel(new BorderLayout(10, 0));
+        passRow.setOpaque(false);
+        passRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        passRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
 
         JPasswordField newPass = new JPasswordField();
-        JButton changeBtn = new ModernComponents.ModernButton("Valider");
+        newPass.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        newPass.setBackground(new Color(30, 31, 34));
+        newPass.setForeground(Color.WHITE);
+        newPass.setCaretColor(Color.WHITE);
+        newPass.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(50, 52, 57), 1, true),
+                new EmptyBorder(6, 10, 6, 10)));
+
+        JButton changeBtn = new JButton("Valider") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                if (getModel().isRollover()) {
+                    g2.setColor(new Color(71, 82, 196));
+                } else {
+                    g2.setColor(new Color(88, 101, 242));
+                }
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        changeBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        changeBtn.setForeground(Color.WHITE);
+        changeBtn.setBorderPainted(false);
+        changeBtn.setContentAreaFilled(false);
+        changeBtn.setFocusPainted(false);
+        changeBtn.setOpaque(false);
+        changeBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        changeBtn.setPreferredSize(new Dimension(90, 36));
         changeBtn.addActionListener(e -> {
             String p = new String(newPass.getPassword());
             if (!p.isEmpty()) {
-                networkClient.sendCommand("/passwd " + p); // Simplified: just send new pass for now (demo)
-                JOptionPane.showMessageDialog(dialog, "Demande envoyée.");
+                networkClient.sendCommand("/passwd " + p);
                 newPass.setText("");
+                // Show inline success feedback
+                passTitle.setText("✅ MOT DE PASSE MIS À JOUR");
+                passTitle.setForeground(new Color(46, 204, 113));
+                javax.swing.Timer resetTimer = new javax.swing.Timer(2500, ev -> {
+                    passTitle.setText("CHANGER LE MOT DE PASSE");
+                    passTitle.setForeground(new Color(185, 187, 190));
+                });
+                resetTimer.setRepeats(false);
+                resetTimer.start();
             }
         });
 
-        passPanel.add(new JLabel("Nouveau :"));
-        passPanel.add(newPass);
-        passPanel.add(new JPanel() {
-            {
-                setOpaque(false);
+        passRow.add(newPass, BorderLayout.CENTER);
+        passRow.add(changeBtn, BorderLayout.EAST);
+        passCard.add(passRow);
+
+        content.add(passCard);
+
+        card.add(content, BorderLayout.CENTER);
+
+        // --- Make dialog draggable (since it's undecorated) ---
+        final Point[] dragOffset = { null };
+        topSection.addMouseListener(new MouseAdapter() {
+            public void mousePressed(MouseEvent e) {
+                dragOffset[0] = e.getPoint();
             }
-        }); // Spacer
-        passPanel.add(changeBtn);
+        });
+        topSection.addMouseMotionListener(new MouseMotionAdapter() {
+            public void mouseDragged(MouseEvent e) {
+                if (dragOffset[0] != null) {
+                    Point loc = dialog.getLocation();
+                    dialog.setLocation(loc.x + e.getX() - dragOffset[0].x, loc.y + e.getY() - dragOffset[0].y);
+                }
+            }
+        });
 
-        dialog.add(passPanel);
-        dialog.add(Box.createVerticalStrut(20));
-
-        JButton closeBtn = new ModernComponents.ModernButton("Fermer");
-        closeBtn.addActionListener(e -> dialog.dispose());
-
-        dialog.add(closeBtn);
+        dialog.getContentPane().add(card);
         dialog.setVisible(true);
     }
 
@@ -311,6 +587,7 @@ public class ChatController extends JFrame {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(1200, 800);
         setLocationRelativeTo(null);
+        getContentPane().setBackground(BG_DARK);
 
         // Initial setup only, voiceManager must be initialized after host is known
 
@@ -524,7 +801,7 @@ public class ChatController extends JFrame {
         settingsBtn.setToolTipText("Gestion des Rôles");
         settingsBtn.addActionListener(e -> showRoleManager());
 
-        JPanel topButtons = new JPanel(new GridLayout(1, 3, 5, 0)); // Un peu d'espacement
+        JPanel topButtons = new JPanel(new GridLayout(1, 4, 5, 0));
         topButtons.setBackground(BG_SIDEBAR);
         topButtons.add(addChannelBtn);
 
@@ -537,7 +814,17 @@ public class ChatController extends JFrame {
         profileBtn.setToolTipText("Mon Profil");
         profileBtn.addActionListener(e -> showUserProfile());
 
+        JButton statusBtn = new JButton("🟢");
+        statusBtn.setForeground(TEXT_GRAY);
+        statusBtn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 16));
+        statusBtn.setBorder(null);
+        statusBtn.setContentAreaFilled(false);
+        statusBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        statusBtn.setToolTipText("Changer mon statut");
+        statusBtn.addActionListener(e -> showStatusSelector(statusBtn));
+
         topButtons.add(profileBtn);
+        topButtons.add(statusBtn);
         topButtons.add(settingsBtn);
 
         headerContainer.add(topButtons, BorderLayout.EAST);
@@ -601,6 +888,23 @@ public class ChatController extends JFrame {
 
         voiceControlPanel.add(voiceInfo, BorderLayout.CENTER);
         voiceControlPanel.add(voiceControls, BorderLayout.EAST);
+        JButton expandCallBtn = new JButton("🔲");
+        expandCallBtn.setToolTipText("Développer l'appel");
+        expandCallBtn.setForeground(TEXT_NORMAL);
+        expandCallBtn.setBorderPainted(false);
+        expandCallBtn.setContentAreaFilled(false);
+        expandCallBtn.setFocusPainted(false);
+        expandCallBtn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 14));
+        expandCallBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        expandCallBtn.addActionListener(e -> openCallWindow());
+
+        JPanel voiceBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        voiceBtns.setOpaque(false);
+        voiceBtns.add(expandCallBtn);
+        voiceBtns.add(sidebarHangUp);
+
+        voiceControlPanel.add(voiceInfo, BorderLayout.CENTER);
+        voiceControlPanel.add(voiceBtns, BorderLayout.EAST);
 
         leftPanel.add(voiceControlPanel, BorderLayout.SOUTH);
 
@@ -625,7 +929,10 @@ public class ChatController extends JFrame {
         dmCallBtn.setVisible(false);
         dmCallBtn.addActionListener(e -> {
             if (currentDMUser != null) {
+                // Notify the other user about the call
                 networkClient.sendCommand("/call " + currentDMUser);
+                // Also start the voice call locally for the caller
+                startVoiceCall(currentDMUser);
             }
         });
 
@@ -669,6 +976,70 @@ public class ChatController extends JFrame {
         sendButton.addActionListener(e -> sendMessage());
         inputPanel.add(sendButton, BorderLayout.EAST);
 
+        // Typing indicator label
+        typingLabel = new JLabel(" ");
+        typingLabel.setForeground(TEXT_GRAY);
+        typingLabel.setFont(new Font("Segoe UI", Font.ITALIC, 12));
+        typingLabel.setBorder(new EmptyBorder(2, 25, 2, 0));
+        typingLabel.setPreferredSize(new Dimension(0, 18));
+
+        // Wrap input + typing label
+        JPanel inputWrapper = new JPanel(new BorderLayout());
+        inputWrapper.setBackground(BG_DARK);
+        inputWrapper.add(typingLabel, BorderLayout.NORTH);
+        inputWrapper.add(inputPanel, BorderLayout.SOUTH);
+
+        // Typing detection on input field
+        inputField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                ChatController.this.onTyping();
+            }
+
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                ChatController.this.onTyping();
+            }
+
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+            }
+        });
+
+        // Right-click context menu on chatArea for delete
+        JPopupMenu chatContextMenu = new JPopupMenu();
+        chatContextMenu.setBackground(BG_SIDEBAR);
+        chatContextMenu.setBorder(javax.swing.BorderFactory.createLineBorder(new Color(32, 34, 37)));
+        JMenuItem deleteItem = new JMenuItem("🗑 Supprimer");
+        deleteItem.setForeground(new Color(237, 66, 69));
+        deleteItem.setBackground(BG_SIDEBAR);
+        deleteItem.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        deleteItem.addActionListener(e -> {
+            try {
+                int caretPos = chatArea.getCaretPosition();
+                int start = javax.swing.text.Utilities.getRowStart(chatArea, caretPos);
+                int end = javax.swing.text.Utilities.getRowEnd(chatArea, caretPos);
+                String lineText = chatArea.getText(start, end - start).trim();
+                if (!lineText.isEmpty() && networkClient != null) {
+                    networkClient.sendCommand("/delete " + lineText);
+                }
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        });
+        chatContextMenu.add(deleteItem);
+
+        chatArea.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger())
+                    chatContextMenu.show(chatArea, e.getX(), e.getY());
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger())
+                    chatContextMenu.show(chatArea, e.getX(), e.getY());
+            }
+        });
+
         // Split center into CardLayout
         centerLayout = new CardLayout();
         centerPanel = new JPanel(centerLayout);
@@ -680,7 +1051,7 @@ public class ChatController extends JFrame {
 
         chatPanel.add(headerPanel, BorderLayout.NORTH);
         chatPanel.add(chatScroll, BorderLayout.CENTER);
-        chatPanel.add(inputPanel, BorderLayout.SOUTH);
+        chatPanel.add(inputWrapper, BorderLayout.SOUTH);
 
         // 2. Voice View
         voicePanel = new JPanel(new BorderLayout());
@@ -730,11 +1101,26 @@ public class ChatController extends JFrame {
         controlsPanel.setBackground(BG_DARK);
         controlsPanel.setBorder(new EmptyBorder(10, 0, 10, 0));
 
-        JButton hangUpBtn = new JButton("Raccrocher");
+        JButton hangUpBtn = new JButton("Raccrocher") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(getBackground());
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
         hangUpBtn.setBackground(new Color(231, 76, 60)); // Red
         hangUpBtn.setForeground(Color.WHITE);
         hangUpBtn.setFocusPainted(false);
+        hangUpBtn.setBorderPainted(false);
+        hangUpBtn.setContentAreaFilled(false);
+        hangUpBtn.setOpaque(false);
         hangUpBtn.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        hangUpBtn.setBorder(new EmptyBorder(8, 20, 8, 20));
+        hangUpBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
         hangUpBtn.addActionListener(e -> leaveVoiceChannel());
 
         controlsPanel.add(hangUpBtn);
@@ -757,12 +1143,26 @@ public class ChatController extends JFrame {
         friendsLabel.setFont(new Font("Segoe UI", Font.BOLD, 16));
         friendsHeader.add(friendsLabel, BorderLayout.WEST);
 
-        JButton addFriendBtn = new JButton("Ajouter un ami");
+        JButton addFriendBtn = new JButton("Ajouter un ami") {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(getBackground());
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
         addFriendBtn.setBackground(new Color(46, 204, 113));
         addFriendBtn.setForeground(Color.WHITE);
         addFriendBtn.setFocusPainted(false);
-        addFriendBtn.setFont(new Font("Segoe UI", Font.BOLD, 14)); // Bigger font
-        addFriendBtn.setBorder(new EmptyBorder(5, 15, 5, 15)); // Padding
+        addFriendBtn.setBorderPainted(false);
+        addFriendBtn.setContentAreaFilled(false);
+        addFriendBtn.setOpaque(false);
+        addFriendBtn.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        addFriendBtn.setBorder(new EmptyBorder(5, 15, 5, 15));
+        addFriendBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
         addFriendBtn.addActionListener(e -> {
             String target = JOptionPane.showInputDialog(this, "Entrez le pseudo#tag de l'ami :");
             if (target != null && !target.trim().isEmpty()) {
@@ -820,6 +1220,7 @@ public class ChatController extends JFrame {
 
         // Main Container for Content (Channel + Chat + Users)
         JPanel contentContainer = new JPanel(new BorderLayout());
+        contentContainer.setBackground(BG_DARK);
         contentContainer.add(leftPanel, BorderLayout.WEST);
         contentContainer.add(centerPanel, BorderLayout.CENTER);
         contentContainer.add(rightPanel, BorderLayout.EAST);
@@ -843,6 +1244,7 @@ public class ChatController extends JFrame {
 
         // Fix width of the scroll pane region
         JPanel serverContainer = new JPanel(new BorderLayout());
+        serverContainer.setBackground(new Color(32, 34, 37));
         serverContainer.add(serverScroll, BorderLayout.CENTER);
         serverContainer.setPreferredSize(new Dimension(72, 0)); // Fixed width for sidebar
 
@@ -1308,7 +1710,8 @@ public class ChatController extends JFrame {
                     String time = msg.getTimestamp().format(DateTimeFormatter.ofPattern("HH:mm"));
                     chatDoc.insertString(chatDoc.getLength(), msg.getUsername(), userStyle);
                     chatDoc.insertString(chatDoc.getLength(), "  " + time + "\n", timeStyle);
-                    chatDoc.insertString(chatDoc.getLength(), msg.getContent() + "\n\n", textStyle);
+                    insertRichText(msg.getContent(), textStyle);
+                    chatDoc.insertString(chatDoc.getLength(), "\n", textStyle);
 
                     // Notification sonore (si pas moi)
                     if (!msg.getUsername().equals(currentUser)) {
@@ -1323,6 +1726,58 @@ public class ChatController extends JFrame {
                 e.printStackTrace();
             }
         });
+    }
+
+    // === RICH TEXT FORMATTING ===
+    private void insertRichText(String text, SimpleAttributeSet baseStyle) throws BadLocationException {
+        // Parse markdown-like formatting: **bold**, *italic*, `code`, ~~strikethrough~~
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "(\\*\\*(.+?)\\*\\*)" + // **bold**
+                        "|(\\*(.+?)\\*)" + // *italic*
+                        "|(`(.+?)`)" + // `code`
+                        "|(~~(.+?)~~)" // ~~strikethrough~~
+        );
+        java.util.regex.Matcher matcher = pattern.matcher(text);
+        int lastEnd = 0;
+
+        while (matcher.find()) {
+            // Insert text before match
+            if (matcher.start() > lastEnd) {
+                chatDoc.insertString(chatDoc.getLength(), text.substring(lastEnd, matcher.start()), baseStyle);
+            }
+
+            if (matcher.group(2) != null) {
+                // **Bold**
+                SimpleAttributeSet boldStyle = new SimpleAttributeSet(baseStyle);
+                StyleConstants.setBold(boldStyle, true);
+                chatDoc.insertString(chatDoc.getLength(), matcher.group(2), boldStyle);
+            } else if (matcher.group(4) != null) {
+                // *Italic*
+                SimpleAttributeSet italicStyle = new SimpleAttributeSet(baseStyle);
+                StyleConstants.setItalic(italicStyle, true);
+                chatDoc.insertString(chatDoc.getLength(), matcher.group(4), italicStyle);
+            } else if (matcher.group(6) != null) {
+                // `Code`
+                SimpleAttributeSet codeStyle = new SimpleAttributeSet(baseStyle);
+                StyleConstants.setFontFamily(codeStyle, "Consolas");
+                StyleConstants.setBackground(codeStyle, new Color(40, 42, 46));
+                StyleConstants.setForeground(codeStyle, new Color(230, 219, 116));
+                chatDoc.insertString(chatDoc.getLength(), " " + matcher.group(6) + " ", codeStyle);
+            } else if (matcher.group(8) != null) {
+                // ~~Strikethrough~~
+                SimpleAttributeSet strikeStyle = new SimpleAttributeSet(baseStyle);
+                StyleConstants.setStrikeThrough(strikeStyle, true);
+                StyleConstants.setForeground(strikeStyle, TEXT_GRAY);
+                chatDoc.insertString(chatDoc.getLength(), matcher.group(8), strikeStyle);
+            }
+            lastEnd = matcher.end();
+        }
+
+        // Insert remaining text
+        if (lastEnd < text.length()) {
+            chatDoc.insertString(chatDoc.getLength(), text.substring(lastEnd), baseStyle);
+        }
+        chatDoc.insertString(chatDoc.getLength(), "\n", baseStyle);
     }
 
     private void sendMessage() {
@@ -1431,6 +1886,96 @@ public class ChatController extends JFrame {
         displayMessage(new Message("System", text, currentChannel, Message.MessageType.SYSTEM));
     }
 
+    // === TYPING INDICATOR ===
+    private void onTyping() {
+        if (networkClient == null)
+            return;
+        long now = System.currentTimeMillis();
+        if (now - lastTypingSent < 2000)
+            return; // Throttle to once per 2 seconds
+        lastTypingSent = now;
+        if (currentDMUser != null) {
+            networkClient.sendCommand("/typing_dm " + currentDMUser);
+        } else {
+            networkClient.sendCommand("/typing");
+        }
+    }
+
+    public void showTypingIndicator(String username) {
+        SwingUtilities.invokeLater(() -> {
+            typingLabel.setText("  ✏️ " + username + " est en train d'écrire...");
+            // Clear after 3 seconds
+            if (typingClearTimer != null && typingClearTimer.isRunning()) {
+                typingClearTimer.restart();
+            } else {
+                typingClearTimer = new javax.swing.Timer(3000, e -> {
+                    typingLabel.setText(" ");
+                    typingClearTimer.stop();
+                });
+                typingClearTimer.setRepeats(false);
+                typingClearTimer.start();
+            }
+        });
+    }
+
+    // === DELETE MESSAGE ===
+    public void deleteMessageFromChat(String username, String contentToDelete) {
+        SwingUtilities.invokeLater(() -> {
+            try {
+                String fullText = chatDoc.getText(0, chatDoc.getLength());
+                int idx = fullText.indexOf(contentToDelete);
+                if (idx >= 0) {
+                    // Find the line boundaries
+                    int lineStart = fullText.lastIndexOf('\n', idx);
+                    if (lineStart < 0)
+                        lineStart = 0;
+                    else
+                        lineStart++;
+                    int lineEnd = fullText.indexOf('\n', idx + contentToDelete.length());
+                    if (lineEnd < 0)
+                        lineEnd = fullText.length();
+                    else
+                        lineEnd++; // include newline
+                    chatDoc.remove(lineStart, lineEnd - lineStart);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+    }
+
+    // === STATUS SELECTOR ===
+    private void showStatusSelector(Component invoker) {
+        JPopupMenu statusMenu = new JPopupMenu();
+        statusMenu.setBackground(BG_SIDEBAR);
+        statusMenu.setBorder(javax.swing.BorderFactory.createLineBorder(new Color(32, 34, 37)));
+
+        String[][] statuses = {
+                { "🟢", "En ligne", "ONLINE" },
+                { "🟡", "Absent", "IDLE" },
+                { "🔴", "Ne pas déranger", "DND" },
+                { "⚫", "Invisible", "INVISIBLE" }
+        };
+
+        for (String[] s : statuses) {
+            JMenuItem item = new JMenuItem(s[0] + " " + s[1]);
+            item.setBackground(BG_SIDEBAR);
+            item.setForeground(TEXT_NORMAL);
+            item.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+            item.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            String statusCode = s[2];
+            item.addActionListener(e -> {
+                if (networkClient != null) {
+                    networkClient.sendCommand("/status " + statusCode);
+                }
+                statusMenu.setVisible(false);
+            });
+            statusMenu.add(item);
+        }
+
+        statusMenu.show(invoker, 0, -statusMenu.getPreferredSize().height);
+    }
+
     public void showNotification(String title, String message) {
         SwingUtilities.invokeLater(() -> {
             // Create toast notification
@@ -1482,54 +2027,95 @@ public class ChatController extends JFrame {
             // Play sound
             java.awt.Toolkit.getDefaultToolkit().beep();
 
-            // Show incoming call dialog
             JDialog callDialog = new JDialog(this, "Appel entrant", false);
-            callDialog.setSize(350, 200);
+            callDialog.setUndecorated(true);
+            callDialog.setSize(320, 400);
             callDialog.setLocationRelativeTo(this);
             callDialog.setAlwaysOnTop(true);
+            callDialog.setBackground(new Color(0, 0, 0, 0));
 
-            JPanel panel = new JPanel();
-            panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-            panel.setBackground(new Color(30, 33, 36));
-            panel.setBorder(new EmptyBorder(20, 30, 20, 30));
+            // Main Card
+            JPanel card = new JPanel() {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(new Color(30, 31, 34)); // Darker BG
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 20, 20);
+                    // Subtle border
+                    g2.setColor(new Color(255, 255, 255, 10));
+                    g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 20, 20);
+                    g2.dispose();
+                }
+            };
+            card.setLayout(new BorderLayout());
+            card.setOpaque(false);
 
-            JLabel callerLabel = new JLabel("📞 " + callerUsername + " vous appelle !");
-            callerLabel.setForeground(Color.WHITE);
-            callerLabel.setFont(new Font("Segoe UI", Font.BOLD, 16));
-            callerLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+            // Content Panel
+            JPanel content = new JPanel();
+            content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+            content.setOpaque(false);
+            content.setBorder(new EmptyBorder(40, 20, 40, 20));
 
-            JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 20, 0));
+            // Avatar pulsating effect
+            JLabel avatar = new JLabel(ModernComponents.generateAvatar(callerUsername, 100));
+            avatar.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+            JLabel title = new JLabel("APPEL ENTRANT");
+            title.setForeground(TEXT_GRAY);
+            title.setFont(new Font("Segoe UI", Font.BOLD, 12));
+            title.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+            JLabel name = new JLabel(callerUsername);
+            name.setForeground(Color.WHITE);
+            name.setFont(new Font("Segoe UI", Font.BOLD, 24));
+            name.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+            content.add(title);
+            content.add(Box.createVerticalStrut(20));
+            content.add(avatar);
+            content.add(Box.createVerticalStrut(15));
+            content.add(name);
+
+            // Actions Panel
+            JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 30, 0));
             btnPanel.setOpaque(false);
+            btnPanel.setBorder(new EmptyBorder(0, 0, 40, 0));
 
-            JButton acceptBtn = new JButton("✅ Accepter");
+            JButton rejectBtn = createRoundButton("❌", "Refuser");
+            rejectBtn.setBackground(new Color(237, 66, 69));
+            rejectBtn.addActionListener(e -> callDialog.dispose());
+
+            JButton acceptBtn = createRoundButton("📞", "Accepter");
             acceptBtn.setBackground(new Color(46, 204, 113));
-            acceptBtn.setForeground(Color.WHITE);
-            acceptBtn.setFont(new Font("Segoe UI", Font.BOLD, 14));
-            acceptBtn.setFocusPainted(false);
-            acceptBtn.setBorder(new EmptyBorder(8, 20, 8, 20));
             acceptBtn.addActionListener(e -> {
                 callDialog.dispose();
                 startVoiceCall(callerUsername);
             });
 
-            JButton rejectBtn = new JButton("❌ Refuser");
-            rejectBtn.setBackground(new Color(237, 66, 69));
-            rejectBtn.setForeground(Color.WHITE);
-            rejectBtn.setFont(new Font("Segoe UI", Font.BOLD, 14));
-            rejectBtn.setFocusPainted(false);
-            rejectBtn.setBorder(new EmptyBorder(8, 20, 8, 20));
-            rejectBtn.addActionListener(e -> callDialog.dispose());
-
-            btnPanel.add(acceptBtn);
             btnPanel.add(rejectBtn);
+            btnPanel.add(acceptBtn);
 
-            panel.add(Box.createVerticalGlue());
-            panel.add(callerLabel);
-            panel.add(Box.createVerticalStrut(20));
-            panel.add(btnPanel);
-            panel.add(Box.createVerticalGlue());
+            card.add(content, BorderLayout.CENTER);
+            card.add(btnPanel, BorderLayout.SOUTH);
 
-            callDialog.getContentPane().add(panel);
+            // Drag support
+            final Point[] dragOffset = { null };
+            card.addMouseListener(new MouseAdapter() {
+                public void mousePressed(MouseEvent e) {
+                    dragOffset[0] = e.getPoint();
+                }
+            });
+            card.addMouseMotionListener(new MouseMotionAdapter() {
+                public void mouseDragged(MouseEvent e) {
+                    if (dragOffset[0] != null) {
+                        Point loc = callDialog.getLocation();
+                        callDialog.setLocation(loc.x + e.getX() - dragOffset[0].x, loc.y + e.getY() - dragOffset[0].y);
+                    }
+                }
+            });
+
+            callDialog.add(card);
             callDialog.setVisible(true);
 
             // Auto-dismiss after 30 seconds
@@ -1550,8 +2136,11 @@ public class ChatController extends JFrame {
         // Open DM chat with the user
         openPrivateChat(otherUser);
 
-        // Create a voice channel name for this call
-        String callChannel = "call_" + otherUser + "_" + currentUser;
+        // Create a CONSISTENT voice channel name (alphabetically sorted)
+        // so both users always join the same channel regardless of who called whom
+        String user1 = currentUser.compareTo(otherUser) < 0 ? currentUser : otherUser;
+        String user2 = currentUser.compareTo(otherUser) < 0 ? otherUser : currentUser;
+        String callChannel = "call_" + user1 + "_" + user2;
 
         // Use VoiceManager to join
         if (voiceManager != null) {
@@ -1561,6 +2150,9 @@ public class ChatController extends JFrame {
             });
             voiceControlPanel.setVisible(true);
             voiceStatusLabel.setText("Appel avec " + otherUser);
+
+            // Auto-open expanded call window
+            openCallWindow();
         }
 
         addSystemMessage("Appel vocal avec " + otherUser + " en cours...");
@@ -1911,8 +2503,31 @@ public class ChatController extends JFrame {
         voiceManager.leaveChannel();
         voiceControlPanel.setVisible(false);
 
-        // Restore presence to current text channel
-        networkClient.sendCommand("/join " + currentChannel);
+        // Only rejoin text channel if NOT in DM mode
+        if (currentDMUser == null && currentChannel != null && !currentChannel.startsWith("DM:")
+                && !currentChannel.startsWith("call_")) {
+            networkClient.sendCommand("/join " + currentChannel);
+        }
+    }
+
+    private CallWindow activeCallWindow = null;
+
+    private void openCallWindow() {
+        if (activeCallWindow != null && activeCallWindow.isDisplayable()) {
+            activeCallWindow.toFront();
+            activeCallWindow.requestFocus();
+            return;
+        }
+        String channelName = voiceStatusLabel.getText();
+        if (channelName == null || channelName.isEmpty()) {
+            channelName = currentDMUser != null ? "Appel avec " + currentDMUser : "Appel vocal";
+        }
+        activeCallWindow = new CallWindow(voiceManager, this, channelName);
+    }
+
+    public void onCallWindowHangUp() {
+        activeCallWindow = null;
+        leaveVoiceChannel();
     }
 
     private void updateSidebarVoiceUsers(String channelName, String[] users) {
@@ -2013,101 +2628,223 @@ public class ChatController extends JFrame {
     private void showCreateChannelDialog() {
         JDialog dialog = new JDialog(this, "Créer un salon", true);
         dialog.setUndecorated(true);
-        dialog.setSize(400, 250);
+        dialog.setSize(440, 420); // Taller for cleaner layout
         dialog.setLocationRelativeTo(this);
-        dialog.getContentPane().setBackground(BG_DARK);
+        dialog.setBackground(new Color(0, 0, 0, 0));
 
-        ((JPanel) dialog.getContentPane()).setBorder(BorderFactory.createLineBorder(ACCENT, 1));
+        // Main Card
+        JPanel card = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(49, 51, 56)); // Discord Modal BG
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
+                g2.dispose();
+            }
+        };
+        card.setLayout(new BorderLayout());
+        card.setOpaque(false);
 
-        JPanel main = new JPanel();
-        main.setLayout(new BoxLayout(main, BoxLayout.Y_AXIS));
-        main.setBackground(BG_DARK);
-        main.setBorder(new EmptyBorder(20, 20, 20, 20));
+        // Content
+        JPanel content = new JPanel();
+        content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+        content.setOpaque(false);
+        content.setBorder(new EmptyBorder(24, 24, 20, 24));
 
-        JLabel title = new JLabel("CRÉER UN SALON");
+        JLabel title = new JLabel("Créer un salon");
         title.setForeground(Color.WHITE);
-        title.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        title.setFont(new Font("Segoe UI", Font.BOLD, 20));
         title.setAlignmentX(Component.LEFT_ALIGNMENT);
 
+        JLabel subTitle = new JLabel("dans " + currentServer);
+        subTitle.setForeground(TEXT_GRAY);
+        subTitle.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        subTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        // Type selection styling
         JLabel typeLabel = new JLabel("TYPE DE SALON");
-        typeLabel.setForeground(TEXT_GRAY);
-        typeLabel.setFont(new Font("Segoe UI", Font.BOLD, 10));
-        typeLabel.setBorder(new EmptyBorder(15, 0, 5, 0));
+        typeLabel.setForeground(new Color(181, 186, 193));
+        typeLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
         typeLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JRadioButton textRadio = new JRadioButton("Textuel"); // Custom styling needed potentially, but lets stick to
-                                                              // simpler
-        textRadio.setBackground(BG_DARK);
-        textRadio.setForeground(TEXT_NORMAL);
-        JRadioButton voiceRadio = new JRadioButton("Vocal");
-        voiceRadio.setBackground(BG_DARK);
-        voiceRadio.setForeground(TEXT_NORMAL);
+        // Custom Radio Buttons Container
+        JPanel radioPanel = new JPanel(new GridLayout(2, 1, 0, 10));
+        radioPanel.setOpaque(false);
+        radioPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        radioPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 120));
 
+        JRadioButton textRadio = new JRadioButton();
+        JRadioButton voiceRadio = new JRadioButton();
         ButtonGroup group = new ButtonGroup();
         group.add(textRadio);
         group.add(voiceRadio);
         textRadio.setSelected(true);
 
-        JPanel radioPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        radioPanel.setBackground(BG_DARK);
-        radioPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        radioPanel.add(textRadio);
-        radioPanel.add(voiceRadio);
+        // Helper to create big radio button option like Discord
+        ActionListener radioListener = e -> {
+            content.repaint(); // Repaint to update custom visuals
+        };
+        textRadio.addActionListener(radioListener);
+        voiceRadio.addActionListener(radioListener);
+
+        // Custom Panel for Text Option
+        JPanel textOption = createRadioOptionPanel(textRadio, "💬", "Textuel",
+                "Envoyez des messages, images, GIFs, emojis.");
+        JPanel voiceOption = createRadioOptionPanel(voiceRadio, "🔊", "Vocal",
+                "Discutez par voix, vidéo, et partage d'écran.");
+
+        radioPanel.add(textOption);
+        radioPanel.add(voiceOption);
 
         JLabel nameLabel = new JLabel("NOM DU SALON");
-        nameLabel.setForeground(TEXT_GRAY);
-        nameLabel.setFont(new Font("Segoe UI", Font.BOLD, 10));
-        nameLabel.setBorder(new EmptyBorder(10, 0, 5, 0));
+        nameLabel.setForeground(new Color(181, 186, 193));
+        nameLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
         nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JTextField nameField = new RoundedTextField(10);
-        nameField.setBackground(BG_INPUT);
+        JTextField nameField = new RoundedTextField(6);
+        nameField.setBackground(new Color(30, 31, 34));
         nameField.setForeground(TEXT_NORMAL);
         nameField.setCaretColor(Color.WHITE);
-        nameField.setBorder(new EmptyBorder(5, 10, 5, 10));
+        nameField.setBorder(new EmptyBorder(10, 10, 10, 10));
         nameField.setAlignmentX(Component.LEFT_ALIGNMENT);
-        nameField.setMaximumSize(new Dimension(500, 35));
+        nameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        nameField.setFont(new Font("Segoe UI", Font.PLAIN, 14));
 
-        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        btnPanel.setBackground(BG_DARK);
-        btnPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel hashPrefix = new JLabel("# ");
+        hashPrefix.setForeground(TEXT_GRAY);
+        // Maybe add prefix inside visual field later
+
+        content.add(title);
+        content.add(subTitle);
+        content.add(Box.createVerticalStrut(20));
+        content.add(typeLabel);
+        content.add(Box.createVerticalStrut(8));
+        content.add(radioPanel);
+        content.add(Box.createVerticalStrut(20));
+        content.add(nameLabel);
+        content.add(Box.createVerticalStrut(8));
+        content.add(nameField);
+
+        // Footer buttons
+        JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 15, 15));
+        footer.setBackground(new Color(43, 45, 49)); // Slightly lighter/darker footer
+        footer.setBorder(new EmptyBorder(0, 0, 0, 0));
 
         JButton cancelBtn = new JButton("Annuler");
         cancelBtn.setForeground(Color.WHITE);
+        cancelBtn.setFont(new Font("Segoe UI", Font.PLAIN, 14));
         cancelBtn.setContentAreaFilled(false);
         cancelBtn.setBorderPainted(false);
+        cancelBtn.setFocusPainted(false);
+        cancelBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
         cancelBtn.addActionListener(e -> dialog.dispose());
 
-        JButton createBtn = new ModernComponents.ModernButton("Créer");
-        createBtn.setPreferredSize(new Dimension(100, 35));
+        JButton createBtn = new ModernComponents.ModernButton("Créer le salon");
+        createBtn.setPreferredSize(new Dimension(130, 38));
         createBtn.addActionListener(e -> {
             String name = nameField.getText().trim().replace(" ", "-").toLowerCase();
             if (!name.isEmpty()) {
                 String type = voiceRadio.isSelected() ? "VOICE" : "TEXT";
-                // Handle spaces in server name? Server name is last argument.
-                // ClientHandler needs to be updated to join remaining parts or use a delimiter.
-                // Let's use a safe delimiter if possible, or assume simple parsing for now.
-                // Or better, send as Message object with custom fields? No, command is string
-                // based.
-                // Let's just append it.
                 networkClient.sendCommand("/create " + name + " " + type + " " + currentServer);
                 dialog.dispose();
             }
         });
 
-        btnPanel.add(cancelBtn);
-        btnPanel.add(createBtn);
+        footer.add(cancelBtn);
+        footer.add(createBtn);
 
-        main.add(title);
-        main.add(typeLabel);
-        main.add(radioPanel);
-        main.add(nameLabel);
-        main.add(nameField);
-        main.add(Box.createVerticalStrut(20));
-        main.add(btnPanel);
+        card.add(content, BorderLayout.CENTER);
+        card.add(footer, BorderLayout.SOUTH);
 
-        dialog.add(main);
+        // Drag support
+        final Point[] dragOffset = { null };
+        card.addMouseListener(new MouseAdapter() {
+            public void mousePressed(MouseEvent e) {
+                dragOffset[0] = e.getPoint();
+            }
+        });
+        card.addMouseMotionListener(new MouseMotionAdapter() {
+            public void mouseDragged(MouseEvent e) {
+                if (dragOffset[0] != null) {
+                    Point loc = dialog.getLocation();
+                    dialog.setLocation(loc.x + e.getX() - dragOffset[0].x, loc.y + e.getY() - dragOffset[0].y);
+                }
+            }
+        });
+
+        dialog.add(card);
         dialog.setVisible(true);
+    }
+
+    private JPanel createRadioOptionPanel(JRadioButton radio, String icon, String title, String desc) {
+        JPanel p = new JPanel(new BorderLayout(10, 0)) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                if (radio.isSelected()) {
+                    g2.setColor(new Color(65, 67, 74)); // Selected BG
+                } else {
+                    g2.setColor(new Color(43, 45, 49)); // Default BG
+                }
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+                g2.dispose();
+            }
+        };
+        p.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        p.setBorder(new EmptyBorder(10, 10, 10, 10));
+        p.addMouseListener(new MouseAdapter() {
+            public void mouseClicked(MouseEvent e) {
+                radio.setSelected(true);
+                // Force repaint of parent container to update styles
+                Container parent = p.getParent();
+                if (parent != null)
+                    parent.repaint();
+            }
+        });
+
+        JLabel iconLabel = new JLabel(icon);
+        iconLabel.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 24));
+        iconLabel.setForeground(Color.LIGHT_GRAY);
+
+        JPanel textPanel = new JPanel(new GridLayout(2, 1));
+        textPanel.setOpaque(false);
+        JLabel t = new JLabel(title);
+        t.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        t.setForeground(Color.WHITE);
+        JLabel d = new JLabel(desc);
+        d.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        d.setForeground(TEXT_GRAY);
+        textPanel.add(t);
+        textPanel.add(d);
+
+        // Radio visual styling
+        JPanel radioViz = new JPanel() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                // Outer circle
+                g2.setColor(new Color(181, 186, 193));
+                g2.drawOval(0, 0, 18, 18);
+                if (radio.isSelected()) {
+                    g2.setColor(Color.WHITE);
+                    g2.drawOval(0, 0, 18, 18);
+                    g2.setColor(Color.WHITE);
+                    g2.fillOval(4, 4, 10, 10);
+                }
+                g2.dispose();
+            }
+        };
+        radioViz.setOpaque(false);
+        radioViz.setPreferredSize(new Dimension(20, 20));
+
+        p.add(iconLabel, BorderLayout.WEST);
+        p.add(textPanel, BorderLayout.CENTER);
+        p.add(radioViz, BorderLayout.EAST);
+
+        return p;
     }
 
     private void showShareMenu(Component invoker) {
@@ -2203,6 +2940,7 @@ public class ChatController extends JFrame {
             btn.setForeground(Color.WHITE);
             btn.setBackground(new Color(47, 49, 54));
             btn.setOpaque(true);
+            btn.setContentAreaFilled(false);
             btn.setBorderPainted(false);
             btn.setFocusPainted(false);
             btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
@@ -2242,7 +2980,17 @@ public class ChatController extends JFrame {
     }
 
     private JButton createRoundButton(String text, String tooltip) {
-        JButton btn = new JButton(text);
+        JButton btn = new JButton(text) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(getBackground());
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 12, 12);
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
         btn.setPreferredSize(new Dimension(50, 50));
         btn.setMargin(new Insets(0, 0, 0, 0)); // Fix truncation
         btn.setToolTipText(tooltip);
@@ -2253,15 +3001,19 @@ public class ChatController extends JFrame {
         btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 20)); // Slightly smaller to fit
         btn.setFocusPainted(false);
         btn.setBorderPainted(false);
+        btn.setContentAreaFilled(false); // Let us control painting
+        btn.setOpaque(false);
 
         // Add hover effect
         btn.addMouseListener(new MouseAdapter() {
             public void mouseEntered(MouseEvent e) {
                 btn.setBackground(ACCENT);
+                btn.repaint();
             }
 
             public void mouseExited(MouseEvent e) {
                 btn.setBackground(BG_INPUT);
+                btn.repaint();
             }
         });
 
@@ -2295,6 +3047,8 @@ public class ChatController extends JFrame {
                 statusColor = new Color(250, 166, 26); // Orange
             else if ("DND".equals(status))
                 statusColor = new Color(237, 66, 69); // Red
+            else if ("INVISIBLE".equals(status))
+                statusColor = new Color(116, 127, 141); // Grey
 
             indicator.setBackground(statusColor);
             // Petit contour pour que ça ressorte
@@ -2529,7 +3283,7 @@ public class ChatController extends JFrame {
 
     // --- INTERFACE GESTION ROLES ---
     private void showRoleManager() {
-        JDialog roleDialog = new JDialog(this, "Gestion des Rôles", true);
+        JDialog roleDialog = new JDialog(this, "Gestion des RÃ´les", true);
         roleDialog.setSize(500, 400);
         roleDialog.setLocationRelativeTo(this);
         roleDialog.setLayout(new BorderLayout());
@@ -2537,7 +3291,7 @@ public class ChatController extends JFrame {
 
         JTabbedPane tabs = new JTabbedPane();
 
-        // --- Tab 1: Créer / Modifier ---
+        // --- Tab 1: CrÃ©er / Modifier ---
         JPanel formPanel = new JPanel(new GridLayout(0, 1, 10, 10));
         formPanel.setBackground(BG_DARK);
         formPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
@@ -2545,31 +3299,29 @@ public class ChatController extends JFrame {
         JTextField nameField = new RoundedTextField(20);
         nameField.setText("NouveauRole");
 
-        JCheckBox chkCreate = new JCheckBox("Créer des salons");
+        JCheckBox chkCreate = new JCheckBox("CrÃ©er des salons");
         JCheckBox chkBlock = new JCheckBox("Bloquer / Expulser");
         JCheckBox chkDel = new JCheckBox("Supprimer des messages");
-        JCheckBox chkManage = new JCheckBox("Gérer les rôles (Admin)");
+        JCheckBox chkManage = new JCheckBox("GÃ©rer les rÃ´les (Admin)");
 
         styleCheckBox(chkCreate);
         styleCheckBox(chkBlock);
         styleCheckBox(chkDel);
         styleCheckBox(chkManage);
 
-        formPanel.add(label("Nom du rôle :"));
+        formPanel.add(label("Nom du rÃ´le :"));
         formPanel.add(nameField);
         formPanel.add(chkCreate);
         formPanel.add(chkBlock);
         formPanel.add(chkDel);
         formPanel.add(chkManage);
 
-        JButton saveBtn = new ModernComponents.ModernButton("Créer / Mettre à jour");
+        JButton saveBtn = new ModernComponents.ModernButton("CrÃ©er / Mettre Ã  jour");
         saveBtn.addActionListener(e -> {
             String rName = nameField.getText().trim();
             if (rName.isEmpty())
                 return;
 
-            // Construit la commande sans espaces
-            // /createrole Name 1 0 1 0
             String cmd = String.format("/createrole %s %b %b %b %b",
                     rName,
                     chkCreate.isSelected(),
@@ -2581,7 +3333,7 @@ public class ChatController extends JFrame {
             roleDialog.dispose();
         });
 
-        tabs.addTab("Créer", formPanel);
+        tabs.addTab("CrÃ©er", formPanel);
 
         // --- Tab 2: Liste / Supprimer ---
         JPanel listPanel = new JPanel(new BorderLayout());
@@ -2595,7 +3347,7 @@ public class ChatController extends JFrame {
 
         if (cachedRoles != null) {
             for (String r : cachedRoles) {
-                if (!r.equalsIgnoreCase("Admin")) { // Masquer le rôle Admin
+                if (!r.equalsIgnoreCase("Admin")) { // Masquer le rÃ´le Admin
                     roleListModel.addElement(r);
                 }
             }
@@ -2608,7 +3360,7 @@ public class ChatController extends JFrame {
         roleList.setBackground(BG_SIDEBAR);
         roleList.setForeground(TEXT_NORMAL);
 
-        JButton deleteBtn = new ModernComponents.ModernButton("Supprimer le rôle");
+        JButton deleteBtn = new ModernComponents.ModernButton("Supprimer le rÃ´le");
         deleteBtn.setBackground(new Color(237, 66, 69));
         deleteBtn.addActionListener(e -> {
             String selected = roleList.getSelectedValue();
@@ -2638,11 +3390,10 @@ public class ChatController extends JFrame {
         for (String r : roles)
             cachedRoles.add(r);
 
-        // Update the UI model if it exists
         if (roleListModel != null) {
             roleListModel.clear();
             for (String r : roles) {
-                if (!r.equalsIgnoreCase("Admin")) { // Masquer le rôle Admin
+                if (!r.equalsIgnoreCase("Admin")) {
                     roleListModel.addElement(r);
                 }
             }
@@ -2660,6 +3411,35 @@ public class ChatController extends JFrame {
         JLabel l = new JLabel(text);
         l.setForeground(TEXT_GRAY);
         return l;
+    }
+
+    private JButton createRoundButton(String text, String tooltip) {
+        JButton btn = new JButton(text) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                if (getModel().isPressed()) {
+                    g2.setColor(getBackground().darker());
+                } else if (getModel().isRollover()) {
+                    g2.setColor(getBackground().brighter());
+                } else {
+                    g2.setColor(getBackground());
+                }
+                g2.fillOval(0, 0, getWidth(), getHeight());
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        btn.setToolTipText(tooltip);
+        btn.setForeground(Color.WHITE);
+        btn.setBorderPainted(false);
+        btn.setContentAreaFilled(false);
+        btn.setFocusPainted(false);
+        btn.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 24));
+        btn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        btn.setPreferredSize(new Dimension(50, 50));
+        return btn;
     }
 
     private ImageIcon voiceIcon;

@@ -12,6 +12,28 @@ public class VoiceManager {
     private String serverHost;
     private DatagramSocket socket;
     private boolean active = false;
+    private boolean muted = false;
+    private boolean deafened = false;
+
+    public boolean isMuted() {
+        return muted;
+    }
+
+    public void setMuted(boolean muted) {
+        this.muted = muted;
+    }
+
+    public boolean isDeafened() {
+        return deafened;
+    }
+
+    public void setDeafened(boolean deafened) {
+        this.deafened = deafened;
+    }
+
+    public boolean isActive() {
+        return active;
+    }
 
     private TargetDataLine microphone;
     private SourceDataLine speakers;
@@ -107,6 +129,29 @@ public class VoiceManager {
             try {
                 int bytesRead = microphone.read(audioData, 0, audioData.length);
                 if (bytesRead > 0) {
+                    // When muted, suppress everything: level, talking status, and audio
+                    if (muted) {
+                        // Show zero level when muted
+                        if (levelListener != null) {
+                            levelListener.accept(0.0);
+                        }
+                        // Force talking status to false when muted
+                        if (isTalking) {
+                            isTalking = false;
+                            if (talkingListener != null) {
+                                talkingListener.accept(username, false);
+                            }
+                            try {
+                                byte[] status = new byte[1];
+                                status[0] = (byte) '0';
+                                sendPacket('T', status);
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                        continue; // Skip all audio processing when muted
+                    }
+
                     // Normalize volume for viz if needed (optional)
                     if (levelListener != null) {
                         long sum = 0;
@@ -146,7 +191,7 @@ public class VoiceManager {
                         }
                     }
 
-                    // Packet: 'A' + AudioData (via sendPacket)
+                    // Send audio data
                     byte[] validAudio = new byte[bytesRead];
                     System.arraycopy(audioData, 0, validAudio, 0, bytesRead);
                     sendPacket('A', validAudio);
@@ -193,7 +238,7 @@ public class VoiceManager {
                 int payloadLen = len - payloadStart;
 
                 if (type == 'A') {
-                    if (payloadLen > 0)
+                    if (payloadLen > 0 && !deafened)
                         speakers.write(data, payloadStart, payloadLen);
                 } else if (type == 'T') {
                     // Parse '1' or '0'
